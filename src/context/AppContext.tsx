@@ -1653,7 +1653,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : Math.floor(Math.random() * 50) + 21;
       const plagScore =
         options.mode === 'plagiarism' || options.mode === 'both'
-          ? Math.floor(Math.random() * 17) + 1
+          ? Math.floor(Math.random() * 13)
           : 0;
       const excludeQuotesSetting = options.excludeQuotes !== false;
       const excludeBibliographySetting = options.excludeBibliography !== false;

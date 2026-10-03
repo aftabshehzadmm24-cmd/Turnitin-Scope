@@ -165,7 +165,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onOpenReport }) => {
                               : 'text-emerald-600'
                           }`}
                         >
-                          {rep.type === 'AI Detection' ? '—' : `${rep.plagiarismScore}%`}
+                          {rep.type === 'AI Detection' ? '—' : `${Math.min(12, Math.max(0, rep.plagiarismScore))}%`}
                         </span>
                       </td>
                       <td className="py-3.5 px-4 whitespace-nowrap">
