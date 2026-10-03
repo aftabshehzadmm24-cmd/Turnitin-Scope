@@ -15,6 +15,33 @@ export type AuthProfileLike = {
   providerData?: Array<{ providerId?: string | null; email?: string | null }>;
 };
 
+const isGenericProfileName = (name: string): boolean =>
+  /^(?:academic(?:\s+google)?(?:\s+user)?|google\s+user)$/i.test(name.trim());
+
+const formatEmailName = (email?: string | null): string => {
+  const localPart = email?.trim().split('@')[0] || '';
+  return localPart
+    .split(/[._+-]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+};
+
+export function resolveProfileName(
+  displayName?: string | null,
+  savedName?: string | null,
+  email?: string | null,
+  fallbackName = 'Academic User'
+): string {
+  const googleName = displayName?.trim();
+  if (googleName && !isGenericProfileName(googleName)) return googleName;
+
+  const savedFullName = savedName?.trim();
+  if (savedFullName && !isGenericProfileName(savedFullName)) return savedFullName;
+
+  return formatEmailName(email) || googleName || savedFullName || fallbackName;
+}
+
 export function buildUserFromAuthProfile(
   authProfile: AuthProfileLike,
   fallbackRole: 'client' | 'admin' = 'client'
@@ -24,10 +51,12 @@ export function buildUserFromAuthProfile(
 
   return {
     id: authProfile.uid || `usr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    name:
-      authProfile.displayName ||
-      (isAdmin ? 'TurnitScope Administrator' : email ? email.split('@')[0] : 'Academic User') ||
-      'Academic User',
+    name: resolveProfileName(
+      authProfile.displayName,
+      undefined,
+      email,
+      isAdmin ? 'TurnitScope Administrator' : 'Academic User'
+    ),
     email,
     role: isAdmin ? 'admin' : 'client',
     credits: isAdmin ? 5000 : 25,

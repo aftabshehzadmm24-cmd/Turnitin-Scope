@@ -148,45 +148,10 @@ export function isUnauthorizedDomainError(error: any): boolean {
   return code === 'auth/unauthorized-domain' || message.includes('auth/unauthorized-domain') || message.includes('unauthorized domain');
 }
 
-export function createGoogleAuthFallbackUser(): FirebaseUser {
-  const uid = 'usr_google_local_turnitscope';
-  const email = 'academic.user@local.turnitscope';
-  const displayName = 'Academic Google User';
-
-  const fallbackUser = {
-    uid,
-    email,
-    displayName,
-    photoURL: null,
-    emailVerified: true,
-    isAnonymous: false,
-    metadata: {
-      creationTime: new Date().toISOString(),
-      lastSignInTime: new Date().toISOString(),
-    },
-    providerData: [
-      {
-        providerId: 'google.com',
-        uid,
-        displayName,
-        email,
-        phoneNumber: null,
-        photoURL: null,
-      },
-    ],
-    tenantId: null,
-    delete: async () => {},
-    getIdToken: async () => 'local_google_fallback_token',
-    getIdTokenResult: async () => ({} as any),
-    reload: async () => {},
-    toJSON: () => ({ uid, email, displayName }),
-    phoneNumber: null,
-    providerId: 'firebase',
-    refreshToken: 'local_google_fallback_refresh_token',
-  };
-
-  return fallbackUser as unknown as FirebaseUser;
-}
+export const isLegacyGoogleAuthFallbackSession = (
+  session: Pick<FirebaseUser, 'uid' | 'email'> | null | undefined
+): boolean => session?.uid === 'usr_google_local_turnitscope'
+  || session?.email?.toLowerCase() === 'academic.user@local.turnitscope';
 
 /**
  * Clean data before sending to Firestore to strip out any `undefined` values
@@ -269,13 +234,10 @@ export async function signInWithGoogle(): Promise<{ user: FirebaseUser; isNewUse
     };
   } catch (error: any) {
     if (isUnauthorizedDomainError(error)) {
-      const fallbackUser = createGoogleAuthFallbackUser();
-      try {
-        localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(fallbackUser));
-      } catch (storageErr) {
-        console.warn('Could not persist local Google fallback session:', storageErr);
-      }
-      return { user: fallbackUser };
+      const hostname = typeof window !== 'undefined' ? window.location.hostname : 'this domain';
+      throw new Error(
+        `Google sign-in is not enabled for ${hostname}. Add this domain in Firebase Authentication settings and try again.`
+      );
     }
     if (error?.code === 'auth/popup-blocked') {
       throw new Error('Sign-in popup was blocked by your browser. Please allow popups or open the app in a new tab.');
@@ -376,7 +338,12 @@ function saveLocalAccount(account: LocalAccount) {
 export function getActiveSessionUser(): FirebaseUser | null {
   try {
     const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
+    const session = raw ? JSON.parse(raw) as FirebaseUser : null;
+    if (isLegacyGoogleAuthFallbackSession(session)) {
+      localStorage.removeItem(ACTIVE_SESSION_KEY);
+      return null;
+    }
+    return session;
   } catch {
     return null;
   }

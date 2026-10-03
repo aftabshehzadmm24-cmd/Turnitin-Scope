@@ -23,7 +23,7 @@ import {
 import { doc, collection, deleteDoc, onSnapshot, query, where } from 'firebase/firestore';
 import { ref, deleteObject } from 'firebase/storage';
 import { storage } from '../lib/firebase';
-import { buildUserFromAuthProfile } from '../lib/userProfiles';
+import { buildUserFromAuthProfile, resolveProfileName } from '../lib/userProfiles';
 
 export { buildUserFromAuthProfile };
 
@@ -597,7 +597,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const mergedUser: User = {
               ...data,
               id: fbUser.uid,
-              name: fbUser.displayName || data.name || fbUser.email?.split('@')[0] || 'User',
+              name: resolveProfileName(fbUser.displayName, data.name, fbUser.email, 'User'),
               email: fbUser.email || data.email,
               role: (isUserAdmin ? 'admin' : 'client') as 'admin' | 'client',
               emailVerified: fbUser.emailVerified,
@@ -606,6 +606,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             };
             if (!isUserAdmin && data.role === 'admin') {
               safeSetDoc(userDocRef, { role: 'client' }, { merge: true });
+            }
+            if (data.name !== mergedUser.name) {
+              safeSetDoc(userDocRef, { name: mergedUser.name }, { merge: true }).catch(() => {});
             }
             setCurrentUser(mergedUser);
             if (!isUserAdmin) {
@@ -693,7 +696,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const isAdm = isAdminEmail(fbUser.email);
           const fallbackUser: User = {
             id: fbUser.uid,
-            name: fbUser.displayName || (isAdm ? 'TurnitScope Administrator' : fbUser.email?.split('@')[0]) || 'User',
+            name: resolveProfileName(
+              fbUser.displayName,
+              null,
+              fbUser.email,
+              isAdm ? 'TurnitScope Administrator' : 'User'
+            ),
             email: fbUser.email || '',
             role: isAdm ? 'admin' : 'client',
             credits: isAdm ? 5000 : 25,
@@ -748,6 +756,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         } else {
           setFirebaseUser(null);
+          setCurrentUser(INITIAL_CURRENT_USER);
+          setActivePanel('client');
         }
       }
       setIsAuthLoading(false);

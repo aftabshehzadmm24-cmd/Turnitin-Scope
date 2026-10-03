@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { isUnauthorizedDomainError, createGoogleAuthFallbackUser } from './firebase.ts';
-import { buildUserFromAuthProfile } from './userProfiles';
+import { isUnauthorizedDomainError, isLegacyGoogleAuthFallbackSession } from './firebase.ts';
+import { buildUserFromAuthProfile, resolveProfileName } from './userProfiles';
 
 test('detects unauthorized-domain Firebase errors', () => {
   assert.equal(isUnauthorizedDomainError({ code: 'auth/unauthorized-domain' }), true);
@@ -10,12 +10,9 @@ test('detects unauthorized-domain Firebase errors', () => {
   assert.equal(isUnauthorizedDomainError({ code: 'auth/popup-blocked' }), false);
 });
 
-test('creates a safe local fallback user for Google sign-in', () => {
-  const user = createGoogleAuthFallbackUser();
-  assert.equal(user.email, 'academic.user@local.turnitscope');
-  assert.equal(user.displayName, 'Academic Google User');
-  assert.equal(user.emailVerified, true);
-  assert.equal(user.isAnonymous, false);
+test('recognizes and removes the legacy synthetic Google account', () => {
+  assert.equal(isLegacyGoogleAuthFallbackSession({ uid: 'usr_google_local_turnitscope', email: 'academic.user@local.turnitscope' } as any), true);
+  assert.equal(isLegacyGoogleAuthFallbackSession({ uid: 'kunal-123', email: 'kunal@example.com' } as any), false);
 });
 
 test('builds a client profile for new Google users and keeps admin access for admin email', () => {
@@ -43,4 +40,10 @@ test('builds a client profile for new Google users and keeps admin access for ad
 
   assert.equal(adminUser.role, 'admin');
   assert.equal(adminUser.credits, 5000);
+});
+
+test('uses a real Google name or account name instead of the generic Academic placeholder', () => {
+  assert.equal(resolveProfileName('Kunal', 'Academic Google User', 'kunal@example.com'), 'Kunal');
+  assert.equal(resolveProfileName(null, 'Academic Google User', 'kunal@example.com'), 'Kunal');
+  assert.equal(resolveProfileName(null, 'Kunal Ahmed', 'kunal@example.com'), 'Kunal Ahmed');
 });
