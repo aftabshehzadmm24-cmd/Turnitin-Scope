@@ -46,4 +46,5 @@ test('uses a real Google name or account name instead of the generic Academic pl
   assert.equal(resolveProfileName('Kunal', 'Academic Google User', 'kunal@example.com'), 'Kunal');
   assert.equal(resolveProfileName(null, 'Academic Google User', 'kunal@example.com'), 'Kunal');
   assert.equal(resolveProfileName(null, 'Kunal Ahmed', 'kunal@example.com'), 'Kunal Ahmed');
+  assert.equal(resolveProfileName(null, null, 'admin@example.com', 'TurnitScope Administrator'), 'TurnitScope Administrator');
 });

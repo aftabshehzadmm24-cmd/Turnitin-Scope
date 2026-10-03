@@ -16,7 +16,7 @@ export type AuthProfileLike = {
 };
 
 const isGenericProfileName = (name: string): boolean =>
-  /^(?:academic(?:\s+google)?(?:\s+user)?|google\s+user)$/i.test(name.trim());
+  /^(?:academic(?:\s+google)?(?:\s+user)?|google\s+user|user)$/i.test(name.trim());
 
 const formatEmailName = (email?: string | null): string => {
   const localPart = email?.trim().split('@')[0] || '';
@@ -39,7 +39,10 @@ export function resolveProfileName(
   const savedFullName = savedName?.trim();
   if (savedFullName && !isGenericProfileName(savedFullName)) return savedFullName;
 
-  return formatEmailName(email) || googleName || savedFullName || fallbackName;
+  const emailName = formatEmailName(email);
+  if (emailName && isGenericProfileName(fallbackName)) return emailName;
+
+  return googleName || savedFullName || fallbackName || emailName || 'Academic User';
 }
 
 export function buildUserFromAuthProfile(
