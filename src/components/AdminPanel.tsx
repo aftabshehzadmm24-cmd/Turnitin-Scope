@@ -66,10 +66,14 @@ export const AdminPanel: React.FC = () => {
     refreshFromFirestore,
     loadMoreAdminUsers,
     loadMoreTransactions,
+    loadPurchaseKeys,
+    loadMorePurchaseKeys,
     hasMoreAdminUsers,
     hasMoreTransactions,
+    hasMorePurchaseKeys,
     isLoadingMoreAdminUsers,
     isLoadingMoreTransactions,
+    isLoadingPurchaseKeys,
     isFirestoreSyncing,
     signOutAuth,
     resetAllData,
@@ -313,7 +317,10 @@ export const AdminPanel: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setAdminTab('keys')}
+            onClick={() => {
+              setAdminTab('keys');
+              void loadPurchaseKeys();
+            }}
             className={`min-w-0 justify-center px-2 sm:px-4 py-2.5 rounded-xl text-[11px] sm:text-xs font-bold transition flex items-center gap-1.5 sm:gap-2 ${
               adminTab === 'keys'
                 ? 'bg-indigo-600 text-white shadow-sm'
@@ -767,7 +774,7 @@ export const AdminPanel: React.FC = () => {
 
             <div className="bg-slate-800/60 border border-slate-700/70 rounded-2xl overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
-                <h3 className="text-sm font-bold text-white">All Keys ({purchaseKeys.length})</h3>
+                <h3 className="text-sm font-bold text-white">Loaded Keys ({purchaseKeys.length})</h3>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[760px] text-left text-xs">
@@ -825,12 +832,26 @@ export const AdminPanel: React.FC = () => {
                     })}
                     {purchaseKeys.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="py-10 px-4 text-center text-slate-500">No purchase keys yet.</td>
+                        <td colSpan={6} className="py-10 px-4 text-center text-slate-500">
+                          {isLoadingPurchaseKeys ? 'Loading purchase keys...' : 'No purchase keys yet.'}
+                        </td>
                       </tr>
                     )}
                   </tbody>
                 </table>
               </div>
+              {hasMorePurchaseKeys && (
+                <div className="flex justify-center border-t border-slate-700 p-4">
+                  <button
+                    type="button"
+                    onClick={() => void loadMorePurchaseKeys()}
+                    disabled={isLoadingPurchaseKeys}
+                    className="rounded-xl border border-slate-600 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+                  >
+                    {isLoadingPurchaseKeys ? 'Loading...' : 'Load 10 more keys'}
+                  </button>
+                </div>
+              )}
             </div>
           </section>
         )}

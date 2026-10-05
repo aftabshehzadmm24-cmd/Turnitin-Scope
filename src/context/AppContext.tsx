@@ -72,6 +72,26 @@ const formatPakistanDateTime = (value: Date | number = Date.now()): string => {
   return `${formatted} PKT`;
 };
 
+const mapPurchaseKey = (
+  docSnap: QueryDocumentSnapshot<DocumentData>
+): PurchaseKey => {
+  const data = docSnap.data();
+  return {
+    id: docSnap.id,
+    key: typeof data.key === 'string' ? data.key : '',
+    credits: typeof data.credits === 'number' ? data.credits : 0,
+    maxUses: typeof data.maxUses === 'number' ? data.maxUses : 1,
+    usedCount: typeof data.usedCount === 'number' ? data.usedCount : 0,
+    isActive: data.isActive !== false,
+    note: typeof data.note === 'string' ? data.note : '',
+    createdAt: typeof data.createdAt === 'string' ? data.createdAt : '',
+    createdBy: typeof data.createdBy === 'string' ? data.createdBy : '',
+    redeemedByEmail: typeof data.redeemedByEmail === 'string' ? data.redeemedByEmail : undefined,
+    redeemedByUserId: typeof data.redeemedByUserId === 'string' ? data.redeemedByUserId : undefined,
+    redeemedAt: typeof data.redeemedAt === 'string' ? data.redeemedAt : undefined,
+  };
+};
+
 interface AppContextType {
   currentUser: User;
   users: User[];
@@ -145,10 +165,14 @@ interface AppContextType {
   refreshFromFirestore: () => Promise<void>;
   loadMoreAdminUsers: () => Promise<void>;
   loadMoreTransactions: () => Promise<void>;
+  loadPurchaseKeys: () => Promise<void>;
+  loadMorePurchaseKeys: () => Promise<void>;
   hasMoreAdminUsers: boolean;
   hasMoreTransactions: boolean;
+  hasMorePurchaseKeys: boolean;
   isLoadingMoreAdminUsers: boolean;
   isLoadingMoreTransactions: boolean;
+  isLoadingPurchaseKeys: boolean;
   isFirestoreSyncing: boolean;
   resetAllData: () => void;
   setIsSidebarOpen: (open: boolean | ((prev: boolean) => boolean)) => void;
@@ -163,6 +187,7 @@ const STORAGE_KEY_TXNS = 'turnitscope_txns_v1';
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const ADMIN_PAGE_SIZE = 20;
 const ADMIN_ACTIVITY_PAGE_SIZE = 10;
+const ADMIN_PURCHASE_KEY_PAGE_SIZE = 10;
 
 const getUserScopedStorageKey = (key: string, userId?: string): string => {
   if (!userId) return key;
@@ -526,7 +551,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [transactions, setTransactions] = useState<CreditTransaction[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_TXNS);
-      return saved ? JSON.parse(saved) : [
+      return saved
+        ? (JSON.parse(saved) as CreditTransaction[])
+            .sort((first, second) => second.timestamp - first.timestamp)
+            .slice(0, ADMIN_ACTIVITY_PAGE_SIZE)
+        : [
         {
           id: 'tx-init',
           userId: 'usr-kunal',
@@ -557,10 +586,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [hasMoreAdminUsers, setHasMoreAdminUsers] = useState(false);
   const [hasMoreTransactions, setHasMoreTransactions] = useState(false);
+  const [hasMorePurchaseKeys, setHasMorePurchaseKeys] = useState(false);
   const [isLoadingMoreAdminUsers, setIsLoadingMoreAdminUsers] = useState(false);
   const [isLoadingMoreTransactions, setIsLoadingMoreTransactions] = useState(false);
+  const [isLoadingPurchaseKeys, setIsLoadingPurchaseKeys] = useState(false);
   const adminUsersCursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
   const transactionsCursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const purchaseKeysCursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const purchaseKeysLoadedRef = useRef(false);
+  const adminTransactionsInitializedRef = useRef(false);
   const profileSnapshotsRef = useRef(new Map<string, Promise<any>>());
   const getProfileSnapshot = (userId: string) => {
     const existing = profileSnapshotsRef.current.get(userId);
@@ -742,61 +776,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [transactions]);
 
   useEffect(() => {
-    if (!firebaseUser || !isAdminEmail(firebaseUser.email || currentUser.email)) {
-      setPurchaseKeys([]);
-      return;
-    }
-
-    return onSnapshot(
-      collection(db, 'purchase_keys'),
-      snapshot => {
-        snapshot.docs.forEach(docSnap => {
-          const data = docSnap.data();
-          const normalizedKey = typeof data.key === 'string' ? data.key.trim().toUpperCase() : '';
-          if (!normalizedKey || docSnap.id === normalizedKey) return;
-
-          const canonicalRef = doc(db, 'purchase_keys', normalizedKey);
-          void runTransaction(db, async transaction => {
-            const [legacySnapshot, canonicalSnapshot] = await Promise.all([
-              transaction.get(docSnap.ref),
-              transaction.get(canonicalRef),
-            ]);
-            if (!legacySnapshot.exists()) return;
-
-            if (!canonicalSnapshot.exists()) {
-              transaction.set(canonicalRef, { ...legacySnapshot.data(), key: normalizedKey });
-              transaction.delete(docSnap.ref);
-              return;
-            }
-
-            if (canonicalSnapshot.data().key === normalizedKey) {
-              transaction.delete(docSnap.ref);
-            }
-          }).catch(error => console.warn('Could not migrate legacy purchase key:', error));
-        });
-
-        const keys = snapshot.docs.map(docSnap => {
-          const data = docSnap.data();
-          return {
-            id: docSnap.id,
-            key: typeof data.key === 'string' ? data.key : '',
-            credits: typeof data.credits === 'number' ? data.credits : 0,
-            maxUses: typeof data.maxUses === 'number' ? data.maxUses : 1,
-            usedCount: typeof data.usedCount === 'number' ? data.usedCount : 0,
-            isActive: data.isActive !== false,
-            note: typeof data.note === 'string' ? data.note : '',
-            createdAt: typeof data.createdAt === 'string' ? data.createdAt : '',
-            createdBy: typeof data.createdBy === 'string' ? data.createdBy : '',
-            redeemedByEmail: typeof data.redeemedByEmail === 'string' ? data.redeemedByEmail : undefined,
-            redeemedByUserId: typeof data.redeemedByUserId === 'string' ? data.redeemedByUserId : undefined,
-            redeemedAt: typeof data.redeemedAt === 'string' ? data.redeemedAt : undefined,
-          } satisfies PurchaseKey;
-        });
-        keys.sort((first, second) => second.createdAt.localeCompare(first.createdAt));
-        setPurchaseKeys(keys);
-      },
-      error => console.warn('Purchase key listener notice:', error.message)
-    );
+    setPurchaseKeys([]);
+    purchaseKeysCursorRef.current = null;
+    purchaseKeysLoadedRef.current = false;
+    setHasMorePurchaseKeys(false);
   }, [firebaseUser]);
 
   // Listen to Firebase Auth state & active institutional session
@@ -921,6 +904,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const isCurrentAdmin = isAdminEmail(firebaseUser.email);
+    adminTransactionsInitializedRef.current = false;
+    transactionsCursorRef.current = null;
 
     try {
       const userReportsQuery = query(
@@ -1080,8 +1065,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       // 2. Live Activation Codes Collection Listener
-      unsubCodes = onSnapshot(
-        collection(db, 'activation_codes'),
+      if (!isCurrentAdmin) {
+        unsubCodes = onSnapshot(
+          collection(db, 'activation_codes'),
         (snapshot) => {
           if (!snapshot.empty) {
             const fsCodes: ActivationCode[] = [];
@@ -1110,7 +1096,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         (err) => {
           console.warn('Live activation codes subscription notice:', err.message);
         }
-      );
+        );
+      }
 
       // 3. Live Transactions Collection Listener
       // Admins listen to all transactions; individual users query only their own transactions
@@ -1125,40 +1112,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubTxns = onSnapshot(
         txnsQuery,
         (snapshot) => {
+          const isInitialAdminSnapshot = isCurrentAdmin && !adminTransactionsInitializedRef.current;
           if (isCurrentAdmin) {
-            if (!transactionsCursorRef.current && snapshot.docs.length > 0) {
-              transactionsCursorRef.current = snapshot.docs[snapshot.docs.length - 1];
-            }
+            transactionsCursorRef.current = snapshot.docs.length > 0
+              ? snapshot.docs[snapshot.docs.length - 1]
+              : null;
             setHasMoreTransactions(snapshot.docs.length === ADMIN_ACTIVITY_PAGE_SIZE);
+            adminTransactionsInitializedRef.current = true;
           }
-          if (!snapshot.empty) {
-            const fsTxns: CreditTransaction[] = [];
-            snapshot.forEach((docSnap) => {
-              const d = docSnap.data();
-              if (d && d.userId) {
-                fsTxns.push({
-                  id: docSnap.id,
-                  userId: d.userId,
-                  userName: d.userName || 'User',
-                  amount: typeof d.amount === 'number' ? d.amount : 0,
-                  balanceAfter: typeof d.balanceAfter === 'number' ? d.balanceAfter : 0,
-                  type: d.type || 'admin_grant',
-                  note: d.note || '',
-                  date: d.date || formatPakistanDateTime(Date.now()),
-                  timestamp: typeof d.timestamp === 'number' ? d.timestamp : Date.now(),
-                });
-              }
-            });
-            fsTxns.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+          const fsTxns: CreditTransaction[] = [];
+          snapshot.forEach((docSnap) => {
+            const d = docSnap.data();
+            if (d && d.userId) {
+              fsTxns.push({
+                id: docSnap.id,
+                userId: d.userId,
+                userName: d.userName || 'User',
+                amount: typeof d.amount === 'number' ? d.amount : 0,
+                balanceAfter: typeof d.balanceAfter === 'number' ? d.balanceAfter : 0,
+                type: d.type || 'admin_grant',
+                note: d.note || '',
+                date: d.date || formatPakistanDateTime(Date.now()),
+                timestamp: typeof d.timestamp === 'number' ? d.timestamp : Date.now(),
+              });
+            }
+          });
+          fsTxns.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+          if (isInitialAdminSnapshot) {
+            setTransactions(fsTxns);
+          } else {
             setTransactions(previous => {
               const byId = new Map(previous.map(transaction => [transaction.id, transaction]));
               fsTxns.forEach(transaction => byId.set(transaction.id, transaction));
               return Array.from(byId.values()).sort((a, b) => b.timestamp - a.timestamp);
             });
-            try {
-              localStorage.setItem(STORAGE_KEY_TXNS, JSON.stringify(fsTxns));
-            } catch {}
           }
+          try {
+            localStorage.setItem(STORAGE_KEY_TXNS, JSON.stringify(fsTxns));
+          } catch {}
         },
         (err) => {
           console.warn('Live transactions subscription notice:', err.message);
@@ -1282,6 +1273,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const loadPurchaseKeys = async () => {
+    if (!firebaseUser || !isAdminEmail(firebaseUser.email) || purchaseKeysLoadedRef.current || isLoadingPurchaseKeys) return;
+    setIsLoadingPurchaseKeys(true);
+    try {
+      const snapshot = await safeGetDocs(query(
+        collection(db, 'purchase_keys'),
+        orderBy('createdAt', 'desc'),
+        limit(ADMIN_PURCHASE_KEY_PAGE_SIZE)
+      ));
+      if (!snapshot) {
+        setNotification({ message: 'Could not load purchase keys. Please try again.', type: 'error' });
+        return;
+      }
+      purchaseKeysCursorRef.current = snapshot.docs.length > 0
+        ? snapshot.docs[snapshot.docs.length - 1]
+        : null;
+      setPurchaseKeys(snapshot.docs.map(docSnap => mapPurchaseKey(docSnap)));
+      setHasMorePurchaseKeys(snapshot.docs.length === ADMIN_PURCHASE_KEY_PAGE_SIZE);
+      purchaseKeysLoadedRef.current = true;
+    } catch (error) {
+      console.error('Could not load purchase keys:', error);
+      setNotification({ message: 'Could not load purchase keys. Please try again.', type: 'error' });
+    } finally {
+      setIsLoadingPurchaseKeys(false);
+    }
+  };
+
+  const loadMorePurchaseKeys = async () => {
+    const cursor = purchaseKeysCursorRef.current;
+    if (!firebaseUser || !isAdminEmail(firebaseUser.email) || !cursor || isLoadingPurchaseKeys) return;
+    setIsLoadingPurchaseKeys(true);
+    try {
+      const snapshot = await safeGetDocs(query(
+        collection(db, 'purchase_keys'),
+        orderBy('createdAt', 'desc'),
+        startAfter(cursor),
+        limit(ADMIN_PURCHASE_KEY_PAGE_SIZE)
+      ));
+      if (!snapshot) {
+        setNotification({ message: 'Could not load more purchase keys. Please try again.', type: 'error' });
+        return;
+      }
+      if (snapshot.docs.length > 0) {
+        purchaseKeysCursorRef.current = snapshot.docs[snapshot.docs.length - 1];
+        const nextKeys = snapshot.docs.map(docSnap => mapPurchaseKey(docSnap));
+        setPurchaseKeys(previous => {
+          const byId = new Map(previous.map(key => [key.id, key]));
+          nextKeys.forEach(key => byId.set(key.id, key));
+          return Array.from(byId.values()).sort((first, second) => second.createdAt.localeCompare(first.createdAt));
+        });
+      }
+      setHasMorePurchaseKeys(snapshot.docs.length === ADMIN_PURCHASE_KEY_PAGE_SIZE);
+    } catch (error) {
+      console.error('Could not load more purchase keys:', error);
+      setNotification({ message: 'Could not load more purchase keys. Please try again.', type: 'error' });
+    } finally {
+      setIsLoadingPurchaseKeys(false);
+    }
+  };
+
   const refreshFromFirestore = async () => {
     setIsFirestoreSyncing(true);
     const isCurrentAdmin = isAdminEmail(currentUser.email) || currentUser.role === 'admin';
@@ -1335,31 +1386,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       if (firebaseUser) {
-        const codesSnap = await safeGetDocs(collection(db, 'activation_codes'), 3500);
-        if (codesSnap && !codesSnap.empty) {
-          const fsCodes: ActivationCode[] = [];
-          codesSnap.forEach((docSnap: any) => {
-            const d = docSnap.data();
-            if (d && d.code) {
-              fsCodes.push({
-                id: docSnap.id,
-                code: d.code,
-                credits: typeof d.credits === 'number' ? d.credits : 10,
-                maxUses: typeof d.maxUses === 'number' ? d.maxUses : 100,
-                usedCount: typeof d.usedCount === 'number' ? d.usedCount : 0,
-                isActive: d.isActive !== undefined ? !!d.isActive : true,
-                createdAt: d.createdAt || new Date().toISOString().split('T')[0],
-                note: d.note || '',
-                createdBy: d.createdBy || 'Admin',
-              });
-            }
-          });
-          setActivationCodes(fsCodes);
-          try {
-            localStorage.setItem(STORAGE_KEY_CODES, JSON.stringify(fsCodes));
-          } catch {}
-        }
-
         const txnsQuery = isCurrentAdmin
           ? query(collection(db, 'transactions'), orderBy('timestamp', 'desc'), limit(ADMIN_ACTIVITY_PAGE_SIZE))
           : query(
@@ -2668,10 +2694,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshFromFirestore,
         loadMoreAdminUsers,
         loadMoreTransactions,
+        loadPurchaseKeys,
+        loadMorePurchaseKeys,
         hasMoreAdminUsers,
         hasMoreTransactions,
+        hasMorePurchaseKeys,
         isLoadingMoreAdminUsers,
         isLoadingMoreTransactions,
+        isLoadingPurchaseKeys,
         isFirestoreSyncing,
         resetAllData,
         isSidebarOpen,
