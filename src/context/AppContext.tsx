@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { User, ScanReport, ActivationCode, PurchaseKey, CreditTransaction, ScanMode, HighlightedSnippet, MatchedSource } from '../types';
 import { cleanText, generateSmartSnippets, MAX_SIMILARITY_SCORE } from '../utils/documentParser';
 import { generateSourcesForDocument } from '../utils/dynamicManuscriptEngine';
@@ -148,6 +148,27 @@ const getUserScopedStorageKey = (key: string, userId?: string): string => {
 
 const getReportsStorageKey = (userId?: string): string => getUserScopedStorageKey(STORAGE_KEY_REPORTS, userId);
 
+const getReportExpiry = (report: Partial<ScanReport>): number | undefined => {
+  const expiry = report.expiresAt as unknown;
+  if (typeof expiry === 'number' && Number.isFinite(expiry)) return expiry;
+  if (expiry && typeof expiry === 'object') {
+    const timestamp = expiry as {
+      toMillis?: () => number;
+      seconds?: number;
+      _seconds?: number;
+      nanoseconds?: number;
+      _nanoseconds?: number;
+    };
+    if (typeof timestamp.toMillis === 'function') return timestamp.toMillis();
+    const seconds = timestamp.seconds ?? timestamp._seconds;
+    if (typeof seconds === 'number') {
+      const nanoseconds = timestamp.nanoseconds ?? timestamp._nanoseconds ?? 0;
+      return seconds * 1000 + Math.floor(nanoseconds / 1_000_000);
+    }
+  }
+  return typeof report.timestamp === 'number' ? report.timestamp + ONE_DAY_MS : undefined;
+};
+
 const pruneExpiredReports = (items: ScanReport[] = [], userId?: string): ScanReport[] => {
   const now = Date.now();
 
@@ -156,14 +177,14 @@ const pruneExpiredReports = (items: ScanReport[] = [], userId?: string): ScanRep
       const effectiveUserId = item.userId || userId;
       if (userId && effectiveUserId && effectiveUserId !== userId) return false;
 
-      const expiresAt = item.expiresAt ?? (item.timestamp ? item.timestamp + ONE_DAY_MS : undefined);
+      const expiresAt = getReportExpiry(item);
       if (!expiresAt) return true;
       return expiresAt > now;
     })
     .map(item => ({
       ...item,
       userId: item.userId || userId,
-      expiresAt: item.expiresAt ?? (item.timestamp ? item.timestamp + ONE_DAY_MS : Date.now() + ONE_DAY_MS),
+      expiresAt: getReportExpiry(item) ?? Date.now() + ONE_DAY_MS,
     }));
 };
 
@@ -218,7 +239,7 @@ const sanitizePersistedReports = (items: ScanReport[] = [], userId?: string): Sc
         return {
           ...r,
           userId: r.userId || userId,
-          expiresAt: r.expiresAt ?? (r.timestamp ? r.timestamp + ONE_DAY_MS : Date.now() + ONE_DAY_MS),
+          expiresAt: getReportExpiry(r) ?? Date.now() + ONE_DAY_MS,
           submissionId: r.submissionId || `trn:oid:${Math.floor(21940000000 + Math.random() * 99999999)}`,
           contentSample: sample,
           snippets: (cleanedSnippets.length > 0 ? cleanedSnippets : []) as HighlightedSnippet[],
@@ -254,6 +275,28 @@ const preserveReportFiles = (incomingReports: ScanReport[], existingReports: Sca
     ...report,
     fileData: report.fileData || existingFiles.get(report.id),
   }));
+};
+
+const mergeReportsById = (...reportLists: ScanReport[][]): ScanReport[] => {
+  const merged = new Map<string, ScanReport>();
+  for (const reportList of reportLists) {
+    for (const report of reportList) {
+      const existing = merged.get(report.id);
+      if (!existing) {
+        merged.set(report.id, report);
+        continue;
+      }
+      const combined = { ...existing };
+      (Object.keys(report) as (keyof ScanReport)[]).forEach(key => {
+        const value = report[key];
+        if (value !== undefined) {
+          Object.assign(combined, { [key]: value });
+        }
+      });
+      merged.set(report.id, combined);
+    }
+  }
+  return Array.from(merged.values());
 };
 
 const INITIAL_CURRENT_USER: User = {
@@ -403,6 +446,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [reports, setReports] = useState<ScanReport[]>([]);
+  const reportsRef = useRef(reports);
+  reportsRef.current = reports;
 
   useEffect(() => {
     void pruneExpiredReportFiles().catch(error => {
@@ -580,7 +625,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!currentUser?.id) return;
 
     const expired = reports.filter(report => {
-      const expiresAt = report.expiresAt ?? (report.timestamp ? report.timestamp + ONE_DAY_MS : undefined);
+      const expiresAt = getReportExpiry(report);
       return !!expiresAt && expiresAt <= Date.now();
     });
 
@@ -597,7 +642,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       const nextExpiry = reports.reduce<number | undefined>((earliest, report) => {
-        const expiresAt = report.expiresAt ?? (report.timestamp ? report.timestamp + ONE_DAY_MS : undefined);
+        const expiresAt = getReportExpiry(report);
         return expiresAt === undefined ? earliest : earliest === undefined ? expiresAt : Math.min(earliest, expiresAt);
       }, undefined);
 
@@ -606,7 +651,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const expiryTimer = setTimeout(() => {
         const now = Date.now();
         const newlyExpired = reports.filter(report => {
-          const expiresAt = report.expiresAt ?? (report.timestamp ? report.timestamp + ONE_DAY_MS : undefined);
+          const expiresAt = getReportExpiry(report);
           return expiresAt !== undefined && expiresAt <= now;
         });
         const cleanup: Promise<unknown>[] = [];
@@ -619,7 +664,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         void Promise.allSettled(cleanup);
         setReports(previous => previous.filter(report => {
-          const expiresAt = report.expiresAt ?? (report.timestamp ? report.timestamp + ONE_DAY_MS : undefined);
+          const expiresAt = getReportExpiry(report);
           return expiresAt === undefined || expiresAt > now;
         }));
       }, Math.max(0, nextExpiry - Date.now()));
@@ -648,7 +693,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const cleaned = reports
         .filter(report => {
-          const expiresAt = report.expiresAt ?? (report.timestamp ? report.timestamp + ONE_DAY_MS : undefined);
+          const expiresAt = getReportExpiry(report);
           return !expiresAt || expiresAt > Date.now();
         })
         .map(report => ({
@@ -912,25 +957,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userReportsQuery,
         snapshot => {
           if (snapshot.empty) {
-            const cachedReportsJson = localStorage.getItem(getReportsStorageKey(firebaseUser.uid));
-            if (cachedReportsJson) {
-              try {
-                const cachedReports = sanitizePersistedReports(
+            let cachedReports: ScanReport[] = [];
+            try {
+              const cachedReportsJson = localStorage.getItem(getReportsStorageKey(firebaseUser.uid));
+              if (cachedReportsJson) {
+                cachedReports = sanitizePersistedReports(
                   JSON.parse(cachedReportsJson) as ScanReport[],
                   firebaseUser.uid
                 );
-                if (cachedReports.length > 0) {
-                  setReports(previousReports => preserveReportFiles(cachedReports, previousReports));
-                  void hydrateReportFiles(cachedReports).then(hydratedReports => {
-                    setReports(previousReports => preserveReportFiles(hydratedReports, previousReports));
-                  });
-                  return;
-                }
-              } catch (error) {
-                console.warn('Could not restore cached reports while Firestore returned an empty snapshot:', error);
               }
+            } catch (error) {
+              console.warn('Could not restore cached reports while Firestore returned an empty snapshot:', error);
             }
-            setReports([]);
+
+            const retainedReports = sanitizePersistedReports(
+              mergeReportsById(cachedReports, reportsRef.current),
+              firebaseUser.uid
+            );
+            if (retainedReports.length > 0) {
+              setReports(previousReports => preserveReportFiles(retainedReports, previousReports));
+              try {
+                localStorage.setItem(getReportsStorageKey(firebaseUser.uid), JSON.stringify(retainedReports));
+              } catch (error) {
+                console.warn('Could not persist retained reports from an empty Firestore snapshot:', error);
+              }
+              void hydrateReportFiles(retainedReports).then(hydratedReports => {
+                setReports(previousReports => preserveReportFiles(hydratedReports, previousReports));
+              });
+            }
             return;
           }
 
@@ -967,7 +1021,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               fileData: undefined,
             } as ScanReport);
           });
-          const cleanedReports = sanitizePersistedReports(firestoreReports, firebaseUser.uid)
+          let cachedReports: ScanReport[] = [];
+          try {
+            const cachedReportsJson = localStorage.getItem(getReportsStorageKey(firebaseUser.uid));
+            if (cachedReportsJson) {
+              cachedReports = JSON.parse(cachedReportsJson) as ScanReport[];
+            }
+          } catch (error) {
+            console.warn('Could not read cached reports while syncing Firestore reports:', error);
+          }
+          const cleanedReports = sanitizePersistedReports(
+            mergeReportsById(cachedReports, reportsRef.current, firestoreReports),
+            firebaseUser.uid
+          )
             .sort((first, second) => (second.timestamp || 0) - (first.timestamp || 0));
           setReports(previousReports => preserveReportFiles(cleanedReports, previousReports));
           void hydrateReportFiles(cleanedReports).then(hydratedReports => {
@@ -1398,7 +1464,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const reportOwnerId = firebaseUser?.uid || currentUser.id;
       if (reportOwnerId) {
         try {
-          const reportsToPreserve = pruneExpiredReports(reports, reportOwnerId).map(report => ({
+          const cachedReportsJson = localStorage.getItem(getReportsStorageKey(reportOwnerId));
+          const cachedReports = cachedReportsJson
+            ? JSON.parse(cachedReportsJson) as ScanReport[]
+            : [];
+          const reportsToPreserve = sanitizePersistedReports(
+            mergeReportsById(cachedReports, reportsRef.current),
+            reportOwnerId
+          ).map(report => ({
             ...report,
             userId: report.userId || reportOwnerId,
             fileData: undefined,
