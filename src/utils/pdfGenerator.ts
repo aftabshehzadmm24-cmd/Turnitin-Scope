@@ -2248,6 +2248,14 @@ export async function downloadReportPdf(
       y += 17;
       doc.setFillColor(6, 182, 212);
       doc.circle(margin + 6, y - 2, 6, 'F');
+      doc.setDrawColor(255, 255, 255);
+      doc.setFillColor(255, 255, 255);
+      doc.setLineWidth(0.7);
+      doc.line(margin + 6, y - 4.5, margin + 6, y - 6);
+      doc.circle(margin + 6, y - 6.5, 0.5, 'F');
+      doc.roundedRect(margin + 2.5, y - 4.5, 7, 5, 1, 1, 'S');
+      doc.circle(margin + 4.5, y - 2, 0.45, 'F');
+      doc.circle(margin + 7.5, y - 2, 0.45, 'F');
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(8.2);
       doc.setTextColor(0, 0, 0);
