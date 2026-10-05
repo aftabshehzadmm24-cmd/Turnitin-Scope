@@ -51,26 +51,12 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
     const base64Data = arrayBufferToBase64(arrayBuffer);
 
     if (fileExt === 'docx' || fileExt === 'doc') {
-      // Reject oversized Word documents before invoking server-side conversion.
-      try {
-        const rawTextRes = await mammoth.extractRawText({ arrayBuffer });
-        const preflightText = cleanText(rawTextRes.value);
-        const preflightWords = preflightText.trim().split(/\s+/).filter(Boolean).length;
-        if (preflightWords > MAX_DOCUMENT_WORDS) {
-          throw new Error(`File exceeds the maximum limit of 30,000 words (detected ${preflightWords.toLocaleString()} words). Please upload a document with 30,000 words or fewer.`);
-        }
-      } catch (preflightErr) {
-        if (preflightErr instanceof Error && preflightErr.message.includes('30,000 words')) {
-          throw preflightErr;
-        }
-      }
-
       let convertedPdfBase64 = '';
       let pdfPageCount = 0;
       let conversionError = 'DOCX conversion failed. Please make sure LibreOffice is installed and try again.';
       const converterBaseUrl = import.meta.env.VITE_DOCX_CONVERTER_URL?.replace(/\/$/, '');
 
-      // Use the configured LibreOffice service; fall back to text extraction if it is unavailable.
+      // Convert DOC/DOCX to PDF before extracting text or continuing the scan.
       try {
         const conversionEndpoint = converterBaseUrl
           ? `${converterBaseUrl}/api/convert-docx`
@@ -127,16 +113,7 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
         }
 
         if (!extractedText || extractedText.length < 30) {
-          try {
-            const rawTextRes = await mammoth.extractRawText({ arrayBuffer });
-            extractedText = cleanText(rawTextRes.value);
-          } catch {
-            extractedText = '';
-          }
-        }
-
-        if (!extractedText || extractedText.length < 30) {
-          throw new Error('No readable text could be extracted from this document. Please upload a document with selectable text or a valid PDF/DOCX file.');
+          throw new Error('LibreOffice converted the DOCX to PDF, but the resulting PDF did not contain enough readable text to scan.');
         }
 
         const clean = cleanText(extractedText);
