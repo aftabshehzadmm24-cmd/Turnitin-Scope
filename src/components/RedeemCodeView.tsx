@@ -12,13 +12,13 @@ export const RedeemCodeView: React.FC = () => {
   } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!code.trim()) return;
 
     setIsSubmitting(true);
-    setTimeout(() => {
-      const result = redeemCode(code.trim());
+    try {
+      const result = await redeemCode(code.trim());
       if (result.success) {
         setRedeemStatus({
           type: 'success',
@@ -31,8 +31,12 @@ export const RedeemCodeView: React.FC = () => {
           message: result.message,
         });
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not redeem this activation code.';
+      setRedeemStatus({ type: 'error', message });
+    } finally {
       setIsSubmitting(false);
-    }, 400);
+    }
   };
 
   const handleQuickFill = (codeStr: string) => {

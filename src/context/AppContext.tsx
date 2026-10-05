@@ -97,6 +97,7 @@ interface AppContextType {
   createPurchaseKey: (key: string, credits: number, note?: string) => Promise<PurchaseKey | null>;
   deletePurchaseKey: (keyId: string) => Promise<boolean>;
   redeemPurchaseKey: (key: string) => Promise<boolean>;
+  redeemCode: (code: string) => Promise<{ success: boolean; message: string }>;
   runScan: (options: {
     fileName: string;
     mode: ScanMode;
@@ -413,7 +414,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let isCancelled = false;
     const userId = currentUser?.id;
     if (!userId) {
-      setReports([]);
       return () => {
         isCancelled = true;
       };
@@ -1395,6 +1395,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const signOutAuth = async () => {
     try {
+      const reportOwnerId = firebaseUser?.uid || currentUser.id;
+      if (reportOwnerId) {
+        try {
+          const reportsToPreserve = pruneExpiredReports(reports, reportOwnerId).map(report => ({
+            ...report,
+            userId: report.userId || reportOwnerId,
+            fileData: undefined,
+          }));
+          localStorage.setItem(getReportsStorageKey(reportOwnerId), JSON.stringify(reportsToPreserve));
+        } catch (error) {
+          console.warn('Could not back up reports before signing out:', error);
+        }
+      }
+
       await logOut();
       setFirebaseUser(null);
       localStorage.removeItem(STORAGE_KEY_USER);
@@ -1901,6 +1915,110 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const redeemCode = async (code: string): Promise<{ success: boolean; message: string }> => {
+    if (!firebaseUser) {
+      return { success: false, message: 'Sign in before redeeming an activation code.' };
+    }
+
+    const normalizedCode = code.trim().toUpperCase().replace(/\s+/g, '');
+    if (!normalizedCode) {
+      return { success: false, message: 'Enter an activation code.' };
+    }
+
+    const activationCode = activationCodes.find(
+      item => item.code.trim().toUpperCase() === normalizedCode
+    );
+    if (!activationCode) {
+      return { success: false, message: 'Activation code not found. Check the code and try again.' };
+    }
+
+    const codeRef = doc(db, 'activation_codes', activationCode.id);
+    const userRef = doc(db, 'users', firebaseUser.uid);
+    const transactionRef = doc(collection(db, 'transactions'));
+    const now = Date.now();
+
+    try {
+      const result = await runTransaction(db, async transaction => {
+        const [codeSnapshot, userSnapshot] = await Promise.all([
+          transaction.get(codeRef),
+          transaction.get(userRef),
+        ]);
+        if (!codeSnapshot.exists()) throw new Error('Activation code not found. Try refreshing and redeeming again.');
+        if (!userSnapshot.exists()) throw new Error('Your account profile could not be found. Please sign in again.');
+
+        const codeData = codeSnapshot.data();
+        const usedCount = typeof codeData.usedCount === 'number' ? codeData.usedCount : 0;
+        const maxUses = typeof codeData.maxUses === 'number' ? codeData.maxUses : 0;
+        if (
+          codeData.code?.trim().toUpperCase() !== normalizedCode ||
+          codeData.isActive !== true ||
+          usedCount >= maxUses
+        ) {
+          throw new Error('This activation code is invalid, inactive, or has already reached its usage limit.');
+        }
+        if (!Number.isSafeInteger(codeData.credits) || codeData.credits < 1) {
+          throw new Error('This activation code has an invalid credit value. Contact support.');
+        }
+
+        const userData = userSnapshot.data();
+        const balanceAfter = (typeof userData.credits === 'number' ? userData.credits : 0) + codeData.credits;
+        const date = formatPakistanDateTime(now);
+        const nextUsedCount = usedCount + 1;
+        transaction.update(codeRef, {
+          usedCount: nextUsedCount,
+          isActive: nextUsedCount < maxUses,
+        });
+        transaction.set(userRef, { credits: balanceAfter }, { merge: true });
+        transaction.set(transactionRef, {
+          id: transactionRef.id,
+          userId: firebaseUser.uid,
+          userName: currentUser.name,
+          amount: codeData.credits,
+          balanceAfter,
+          type: 'redeem_code',
+          note: `Redeemed activation code: ${normalizedCode}`,
+          date,
+          timestamp: now,
+        });
+
+        return {
+          credits: codeData.credits as number,
+          balanceAfter,
+          usedCount: nextUsedCount,
+          isActive: nextUsedCount < maxUses,
+        };
+      });
+
+      setCurrentUser(previous => ({ ...previous, credits: result.balanceAfter }));
+      setUsers(previous => previous.map(user => user.id === firebaseUser.uid
+        ? { ...user, credits: result.balanceAfter }
+        : user));
+      setActivationCodes(previous => previous.map(item => item.id === activationCode.id
+        ? { ...item, usedCount: result.usedCount, isActive: result.isActive }
+        : item));
+      setTransactions(previous => [{
+        id: transactionRef.id,
+        userId: firebaseUser.uid,
+        userName: currentUser.name,
+        amount: result.credits,
+        balanceAfter: result.balanceAfter,
+        type: 'redeem_code',
+        note: `Redeemed activation code: ${normalizedCode}`,
+        date: formatPakistanDateTime(now),
+        timestamp: now,
+      }, ...previous.filter(item => item.id !== transactionRef.id)]);
+
+      const message = `${result.credits} credits added. Your new balance is ${result.balanceAfter}.`;
+      setNotification({ message, type: 'success' });
+      return { success: true, message };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not redeem this activation code.';
+      console.error('Activation code redemption failed:', error);
+      setNotification({ message, type: 'error' });
+      return { success: false, message };
+    }
+  };
+
   const deleteUser = async (userId: string) => {
     if (!isAdminEmail(currentUser.email)) {
       setNotification({ message: 'Unauthorized: Only administrators can manage user accounts.', type: 'error' });
@@ -2334,6 +2452,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createPurchaseKey,
         deletePurchaseKey,
         redeemPurchaseKey,
+        redeemCode,
         runScan,
         deleteReport,
         updateCurrentUser,
