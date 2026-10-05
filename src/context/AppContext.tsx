@@ -911,6 +911,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsubReports = onSnapshot(
         userReportsQuery,
         snapshot => {
+          if (snapshot.empty) {
+            const cachedReportsJson = localStorage.getItem(getReportsStorageKey(firebaseUser.uid));
+            if (cachedReportsJson) {
+              try {
+                const cachedReports = sanitizePersistedReports(
+                  JSON.parse(cachedReportsJson) as ScanReport[],
+                  firebaseUser.uid
+                );
+                if (cachedReports.length > 0) {
+                  setReports(previousReports => preserveReportFiles(cachedReports, previousReports));
+                  void hydrateReportFiles(cachedReports).then(hydratedReports => {
+                    setReports(previousReports => preserveReportFiles(hydratedReports, previousReports));
+                  });
+                  return;
+                }
+              } catch (error) {
+                console.warn('Could not restore cached reports while Firestore returned an empty snapshot:', error);
+              }
+            }
+            setReports([]);
+            return;
+          }
+
           const firestoreReports: ScanReport[] = [];
           snapshot.docs.forEach(reportDoc => {
             const data = reportDoc.data();

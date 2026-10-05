@@ -95,6 +95,10 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
         conversionError = srvErr instanceof Error ? srvErr.message : conversionError;
       }
 
+      if (!convertedPdfBase64) {
+        throw new Error(`Original DOCX page conversion failed: ${conversionError}`);
+      }
+
       // If converted to true vector PDF via LibreOffice, return vector PDF directly!
       if (convertedPdfBase64) {
         let extractedText = '';
@@ -154,29 +158,6 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
           wordCount: words,
         };
       }
-
-      if (converterBaseUrl) {
-        throw new Error(`Original DOCX page conversion failed: ${conversionError}`);
-      }
-
-      const rawTextRes = await mammoth.extractRawText({ arrayBuffer });
-      const extractedText = cleanText(rawTextRes.value);
-      if (!extractedText || extractedText.length < 30) {
-        throw new Error(conversionError || 'No readable text could be extracted from this Word document.');
-      }
-
-      const words = extractedText.trim().split(/\s+/).filter(Boolean).length;
-      if (words > MAX_DOCUMENT_WORDS) {
-        throw new Error(`File exceeds the maximum limit of 30,000 words (detected ${words.toLocaleString()} words). Please upload a document with 30,000 words or fewer.`);
-      }
-
-      return {
-        text: extractedText,
-        sourceFileMimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        sourceFileSize: file.size,
-        pageCount: Math.max(1, Math.ceil(words / 320)),
-        wordCount: words,
-      };
 
       /*
       const mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';

@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import { execFile } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
 import { PDFDocument } from 'pdf-lib';
 import JSZip from 'jszip';
@@ -72,8 +72,7 @@ function getLibreOfficeBinary(): string | null {
     const isCommandOnPath = !normalized.includes('/') && !normalized.includes('\\') && !normalized.includes('Program Files');
     if (isCommandOnPath) {
       try {
-        const { execFileSync } = require('child_process');
-        execFileSync('where', [normalized], { stdio: 'ignore' });
+        execFileSync(process.platform === 'win32' ? 'where' : 'which', [normalized], { stdio: 'ignore' });
         return normalized;
       } catch {
         continue;
@@ -116,7 +115,6 @@ export async function convertDocxToPdf(docxBase64: string, originalFileName = 'd
 
   const extension = path.extname(originalFileName).toLowerCase() === '.doc' ? '.doc' : '.docx';
   const inputDocxPath = path.join(tmpDir, `source${extension}`);
-  const outputPdfPath = path.join(tmpDir, `source.pdf`);
 
   try {
     const cleanBase64 = docxBase64.includes(',') ? docxBase64.split(',')[1] : docxBase64;
@@ -183,13 +181,11 @@ export async function convertDocxToPdf(docxBase64: string, originalFileName = 'd
       throw new Error(`LibreOffice did not produce any PDF output. ${lastConversionDiagnostic}`.trim());
     }
 
-    const pdfBuffer = fs.readFileSync(generatedPdfPath || outputPdfPath);
-    let pageCount = 1;
-    try {
-      const pdfDoc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
-      pageCount = pdfDoc.getPageCount() || 1;
-    } catch (e) {
-      console.warn('PDFDocument could not read pageCount, defaulting to 1', e);
+    const pdfBuffer = fs.readFileSync(generatedPdfPath);
+    const pdfDoc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
+    const pageCount = pdfDoc.getPageCount();
+    if (pageCount < 1) {
+      throw new Error('LibreOffice produced a PDF with no pages.');
     }
 
     return {
@@ -211,4 +207,3 @@ export async function convertDocxToPdf(docxBase64: string, originalFileName = 'd
     }
   }
 }
-
