@@ -15,14 +15,77 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && (request.auth.token.email == 'admin@turnitscope.com' || request.auth.token.email == 'kunalsukhani333@gmail.com');
+      return isSignedIn() && request.auth.token.email == 'aftabshehzadmm24@gmail.com';
+    }
+
+    function isOwnerProfileEdit() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'name', 'firstName', 'lastName', 'photoURL', 'email', 'phone', 'bio',
+        'institution', 'department', 'academicTitle', 'updatedAt', 'role',
+        'authProvider', 'emailVerified'
+      ]) && request.resource.data.get('role', 'client') == 'client';
+    }
+
+    function isValidScanDebit() {
+      let debit = resource.data.get('credits', 0) - request.resource.data.get('credits', 0);
+      return debit in [2, 3, 5]
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['credits', 'usedCredits', 'totalScans'])
+        && request.resource.data.get('usedCredits', 0) == resource.data.get('usedCredits', 0) + debit
+        && request.resource.data.get('totalScans', 0) == resource.data.get('totalScans', 0) + 1
+        && (!resource.data.keys().hasAny(['planExpiresAt']) || request.time.toMillis() < resource.data.planExpiresAt);
+    }
+
+    function isValidPurchaseKeyCreditGrant() {
+      let keyId = request.resource.data.lastRedeemedPurchaseKeyId;
+      let keyPath = /databases/$(database)/documents/purchase_keys/$(keyId);
+      let keyBefore = get(keyPath);
+      let keyAfter = getAfter(keyPath);
+      let previousExpiry = resource.data.get('planExpiresAt', request.time.toMillis());
+      let expiryBase = previousExpiry > request.time.toMillis() ? previousExpiry : request.time.toMillis();
+      return request.resource.data.get('credits', 0) > resource.data.get('credits', 0)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'credits', 'planExpiry', 'planExpiresAt', 'lastRedeemedPurchaseKeyId'
+        ])
+        && keyBefore.data.key == keyId
+        && keyBefore.data.isActive == true
+        && keyBefore.data.usedCount == 0
+        && keyAfter.data.usedCount == 1
+        && keyAfter.data.isActive == false
+        && keyAfter.data.redeemedByUserId == request.auth.uid
+        && request.resource.data.get('credits', 0) - resource.data.get('credits', 0) == keyBefore.data.credits
+        && request.resource.data.planExpiresAt is int
+        && request.resource.data.planExpiresAt > request.time.toMillis()
+        && request.resource.data.planExpiresAt <= expiryBase + 2678400000
+        && keyAfter.data.redeemedByUserId == request.auth.uid;
+    }
+
+    function isValidPurchaseKeyRedemption(keyId) {
+      let userPath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let userBefore = get(userPath);
+      let userAfter = getAfter(userPath);
+      return isSignedIn()
+        && resource.data.key == keyId
+        && resource.data.isActive == true
+        && resource.data.usedCount == 0
+        && request.resource.data.usedCount == 1
+        && request.resource.data.isActive == false
+        && request.resource.data.redeemedByUserId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'usedCount', 'isActive', 'redeemedByUserId', 'redeemedByEmail', 'redeemedAt'
+        ])
+        && userAfter.data.get('credits', 0) - userBefore.data.get('credits', 0) == resource.data.credits
+        && userAfter.data.lastRedeemedPurchaseKeyId == keyId
+        && userAfter.data.planExpiresAt is int;
     }
 
     match /users/{userId} {
       allow get: if isOwner(userId) || isAdmin();
       allow list: if isAdmin();
-      allow create: if isOwner(userId) || isAdmin();
-      allow update: if isOwner(userId) || isAdmin();
+      allow create: if isAdmin() || (isOwner(userId)
+        && request.resource.data.get('role', 'client') == 'client'
+        && request.resource.data.get('credits', 0) == 0);
+      allow update: if isAdmin() || (isOwner(userId)
+        && (isOwnerProfileEdit() || isValidScanDebit() || isValidPurchaseKeyCreditGrant()));
       allow delete: if isAdmin();
     }
 
@@ -34,9 +97,23 @@ service cloud.firestore {
       allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
+    match /files/{fileId} {
+      allow get: if isSignedIn() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if isSignedIn() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+      allow delete: if isSignedIn() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+    }
+
     match /activation_codes/{codeId} {
       allow read: if isSignedIn();
       allow create, update, delete: if isAdmin();
+    }
+
+    match /purchase_keys/{keyId} {
+      allow get: if isAdmin() || (isSignedIn() && resource.data.key == keyId);
+      allow list, create, delete: if isAdmin();
+      allow update: if isAdmin() || isValidPurchaseKeyRedemption(keyId);
     }
 
     match /transactions/{txnId} {
@@ -44,6 +121,11 @@ service cloud.firestore {
       allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isSignedIn();
       allow update, delete: if isAdmin();
+    }
+
+    match /credit_audit_logs/{logId} {
+      allow get, list: if isAdmin();
+      allow create, update, delete: if false;
     }
 
     match /admins/{adminId} {

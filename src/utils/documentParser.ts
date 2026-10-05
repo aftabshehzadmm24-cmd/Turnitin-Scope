@@ -9,6 +9,9 @@ export interface ExtractedDocumentData {
   text: string;
   fileData?: string; // base64 representation
   fileMimeType?: string;
+  sourceFileData?: string;
+  sourceFileMimeType?: string;
+  sourceFileSize?: number;
   htmlContent?: string;
   htmlPages?: string[];
   pageCount?: number;
@@ -58,10 +61,14 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
       let convertedPdfBase64 = '';
       let pdfPageCount = 0;
       let conversionError = 'DOCX conversion failed. Please make sure LibreOffice is installed and try again.';
+      const converterBaseUrl = import.meta.env.VITE_DOCX_CONVERTER_URL?.replace(/\/$/, '');
 
-      // 1. Direct Server-Side Headless LibreOffice Conversion to Real Vector PDF
+      // Use the configured LibreOffice service; fall back to text extraction if it is unavailable.
       try {
-        const res = await fetch('/api/convert-docx', {
+        const conversionEndpoint = converterBaseUrl
+          ? `${converterBaseUrl}/api/convert-docx`
+          : '/api/convert-docx';
+        const res = await fetch(conversionEndpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ docxBase64: base64Data, fileName: file.name }),
@@ -133,13 +140,36 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
           text: clean,
           fileData: convertedPdfBase64,
           fileMimeType: 'application/pdf',
+          sourceFileData: base64Data,
+          sourceFileMimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          sourceFileSize: file.size,
           pageCount: pdfPageCount || Math.max(1, Math.ceil(words / 320)),
           wordCount: words,
         };
       }
 
-      // Do not silently redraw DOCX as a synthetic manuscript when authentic conversion fails.
-      throw new Error(conversionError);
+      if (converterBaseUrl) {
+        throw new Error(`Original DOCX page conversion failed: ${conversionError}`);
+      }
+
+      const rawTextRes = await mammoth.extractRawText({ arrayBuffer });
+      const extractedText = cleanText(rawTextRes.value);
+      if (!extractedText || extractedText.length < 30) {
+        throw new Error(conversionError || 'No readable text could be extracted from this Word document.');
+      }
+
+      const words = extractedText.trim().split(/\s+/).filter(Boolean).length;
+      if (words > MAX_DOCUMENT_WORDS) {
+        throw new Error(`File exceeds the maximum limit of 30,000 words (detected ${words.toLocaleString()} words). Please upload a document with 30,000 words or fewer.`);
+      }
+
+      return {
+        text: extractedText,
+        sourceFileMimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        sourceFileSize: file.size,
+        pageCount: Math.max(1, Math.ceil(words / 320)),
+        wordCount: words,
+      };
 
       /*
       const mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -261,6 +291,9 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
         text: clean,
         fileData: base64Data,
         fileMimeType: mimeType,
+        sourceFileData: base64Data,
+        sourceFileMimeType: file.type || mimeType,
+        sourceFileSize: file.size,
         pageCount,
         wordCount: words,
       };
@@ -281,6 +314,9 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
         text: cleaned,
         fileData: base64Data,
         fileMimeType: 'text/plain',
+        sourceFileData: base64Data,
+        sourceFileMimeType: file.type || 'text/plain',
+        sourceFileSize: file.size,
         pageCount: pages,
         wordCount: words,
       };

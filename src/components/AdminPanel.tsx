@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { useApp } from '../context/AppContext';
+import { isAdminEmail, useApp } from '../context/AppContext';
+import { ADMIN_EMAIL } from '../lib/firebase';
 import { User } from '../types';
 import { TurnitScopeLogo } from './TurnitScopeLogo';
 import {
@@ -7,7 +8,6 @@ import {
   Coins,
   UserPlus,
   Users,
-  Ticket,
   Clock,
   CheckCircle2,
   Copy,
@@ -19,32 +19,57 @@ import {
   Sliders,
   TrendingUp,
   FileCheck2,
-  UserCog,
   AlertTriangle,
   LogOut,
   X,
   Edit3,
-  Eye,
   Database,
+  KeyRound,
 } from 'lucide-react';
+
+const PURCHASE_KEY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+const createPurchaseKeyCode = (): string => {
+  const randomValues = crypto.getRandomValues(new Uint8Array(20));
+  const keyCharacters = Array.from(randomValues, value => PURCHASE_KEY_ALPHABET[value % PURCHASE_KEY_ALPHABET.length]).join('');
+  const groups = keyCharacters.match(/.{1,5}/g) || [];
+  return `TZ-${groups.join('-')}`;
+};
+
+const formatActivityTimestamp = (timestamp: number, fallbackDate: string): string => {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(timestamp) || Number.isNaN(date.getTime())) return fallbackDate;
+
+  const formatted = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Karachi',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date);
+  return `${formatted} PKT`;
+};
 
 export const AdminPanel: React.FC = () => {
   const {
     currentUser,
     users,
-    activationCodes,
+    purchaseKeys,
     transactions,
     giveCredits,
     addUserAsAdmin,
     updateUserAsAdmin,
     deleteUser,
-    toggleCodeActivation,
     refreshFromFirestore,
     isFirestoreSyncing,
-    setActivePanel,
-    setIsProfileModalOpen,
     signOutAuth,
     resetAllData,
+    createPurchaseKey,
+    deletePurchaseKey,
+    setNotification,
   } = useApp();
 
   // Give credits form state
@@ -52,6 +77,12 @@ export const AdminPanel: React.FC = () => {
   const [creditAmount, setCreditAmount] = useState<number>(25);
   const [creditReason, setCreditReason] = useState<string>('Administrative credit top-up');
   const [grantSuccess, setGrantSuccess] = useState<string | null>(null);
+  const [keyCredits, setKeyCredits] = useState<number>(20);
+  const [keyQuantity, setKeyQuantity] = useState<number>(1);
+  const [keyNote, setKeyNote] = useState<string>('');
+  const [isGeneratingKeys, setIsGeneratingKeys] = useState(false);
+  const [generatedKeysMessage, setGeneratedKeysMessage] = useState<string | null>(null);
+  const [copiedPurchaseKeyId, setCopiedPurchaseKeyId] = useState<string | null>(null);
 
   // Edit user modal state
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -65,7 +96,7 @@ export const AdminPanel: React.FC = () => {
   const [isAddingUser, setIsAddingUser] = useState<boolean>(false);
   const [newUserName, setNewUserName] = useState<string>('');
   const [newUserEmail, setNewUserEmail] = useState<string>('');
-  const [newUserCredits, setNewUserCredits] = useState<number>(25);
+  const [newUserCredits, setNewUserCredits] = useState<number>(0);
   const [newUserPlan, setNewUserPlan] = useState<string>('Standard Verified Plan');
   const [isCreatingUser, setIsCreatingUser] = useState<boolean>(false);
 
@@ -77,27 +108,73 @@ export const AdminPanel: React.FC = () => {
   const [isDeletingUser, setIsDeletingUser] = useState(false);
 
   // Selected tab in admin
-  const [adminTab, setAdminTab] = useState<'allocate' | 'users' | 'logs'>('allocate');
+  const [adminTab, setAdminTab] = useState<'allocate' | 'users' | 'keys' | 'logs'>('allocate');
 
-  const selectedUser = users.find(u => u.id === selectedUserId) || currentUser;
+  const clientUsers = users.filter(user => user.role !== 'admin' && !isAdminEmail(user.email));
+  const selectedUser = clientUsers.find(user => user.id === selectedUserId) || clientUsers[0];
 
   // Handle giving credits
-  const handleGiveCredits = (e: React.FormEvent) => {
+  const handleGiveCredits = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (creditAmount === 0) return;
+    if (!selectedUser || creditAmount === 0) return;
 
-    const success = giveCredits(selectedUserId, creditAmount, creditReason);
+    const success = await giveCredits(selectedUser.id, creditAmount, creditReason);
     if (success) {
       setGrantSuccess(`Allocated +${creditAmount} credits to ${selectedUser.name}!`);
       setTimeout(() => setGrantSuccess(null), 4000);
     }
   };
 
-  // Aggregate stats
-  const totalCreditsInCirculation = users.reduce((acc, u) => acc + u.credits, 0);
-  const totalScansAllUsers = users.reduce((acc, u) => acc + u.totalScans, 0);
+  const handleGeneratePurchaseKeys = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isGeneratingKeys || keyCredits < 1 || keyQuantity < 1) return;
 
-  const filteredUsers = users.filter(
+    setIsGeneratingKeys(true);
+    setGeneratedKeysMessage(null);
+    const knownKeys = new Set(purchaseKeys.map(key => key.key));
+    let createdCount = 0;
+
+    try {
+      for (let index = 0; index < keyQuantity; index += 1) {
+        let key = createPurchaseKeyCode();
+        while (knownKeys.has(key)) key = createPurchaseKeyCode();
+
+        const created = await createPurchaseKey(key, keyCredits, keyNote);
+        if (!created) break;
+        knownKeys.add(created.key);
+        createdCount += 1;
+      }
+
+      if (createdCount > 0) {
+        setGeneratedKeysMessage(`Created ${createdCount} of ${keyQuantity} purchase keys.`);
+        setTimeout(() => setGeneratedKeysMessage(null), 5000);
+      }
+    } finally {
+      setIsGeneratingKeys(false);
+    }
+  };
+
+  const handleCopyPurchaseKey = async (id: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(key);
+      setCopiedPurchaseKeyId(id);
+      setTimeout(() => setCopiedPurchaseKeyId(null), 1800);
+    } catch {
+      setNotification({ message: 'Could not copy the purchase key.', type: 'error' });
+    }
+  };
+
+  const handleDeletePurchaseKey = async (id: string, key: string) => {
+    if (window.confirm(`Delete purchase key ${key}? This cannot be undone.`)) {
+      await deletePurchaseKey(id);
+    }
+  };
+
+  // Aggregate stats
+  const totalCreditsInCirculation = clientUsers.reduce((acc, user) => acc + user.credits, 0);
+  const totalScansAllUsers = clientUsers.reduce((acc, user) => acc + user.totalScans, 0);
+
+  const filteredUsers = clientUsers.filter(
     u =>
       u.name.toLowerCase().includes(userSearch.toLowerCase()) ||
       u.email.toLowerCase().includes(userSearch.toLowerCase())
@@ -132,7 +209,7 @@ export const AdminPanel: React.FC = () => {
           <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs">
             <span className="w-2 h-2 rounded-full bg-amber-400" />
             <span className="text-slate-400">Master Admin:</span>
-            <span className="font-mono text-amber-300 font-semibold">{currentUser.email || 'admin@turnitscope.com'}</span>
+            <span className="font-mono text-amber-300 font-semibold">{currentUser.email || ADMIN_EMAIL}</span>
           </div>
 
           <button
@@ -144,26 +221,6 @@ export const AdminPanel: React.FC = () => {
           >
             <RefreshCw className={`w-3.5 h-3.5 text-indigo-400 ${isFirestoreSyncing ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">{isFirestoreSyncing ? 'Syncing...' : 'Sync Firestore'}</span>
-          </button>
-
-          <button
-            onClick={() => setActivePanel('client')}
-            className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition cursor-pointer"
-            id="btn-admin-client-view"
-            title="Switch to Client Interface"
-          >
-            <Eye className="w-3.5 h-3.5 text-teal-400" />
-            <span className="hidden sm:inline">Client View</span>
-          </button>
-
-          <button
-            onClick={() => setIsProfileModalOpen(true)}
-            className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition cursor-pointer"
-            id="btn-admin-profile"
-            title="Edit Administrator Profile"
-          >
-            <UserCog className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden sm:inline">Profile</span>
           </button>
 
           <button
@@ -181,7 +238,7 @@ export const AdminPanel: React.FC = () => {
       {/* Admin Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 space-y-6">
         {/* KPI Stats Banner */}
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4" id="admin-kpi-grid">
+        <div className="grid grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4" id="admin-kpi-grid">
           <div className="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-4">
             <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
               <span>Total Active Credits</span>
@@ -191,7 +248,7 @@ export const AdminPanel: React.FC = () => {
               {totalCreditsInCirculation}
             </div>
             <div className="text-[11px] text-amber-400/80 mt-1">
-              Across {users.length} registered clients
+              Across {clientUsers.length} registered clients
             </div>
           </div>
 
@@ -214,71 +271,71 @@ export const AdminPanel: React.FC = () => {
               <Users className="w-4 h-4 text-indigo-400" />
             </div>
             <div className="text-2xl font-extrabold text-white font-mono">
-              {users.length}
+              {clientUsers.length}
             </div>
             <div className="text-[11px] text-indigo-400/80 mt-1">
               Active student & lab accounts
             </div>
           </div>
 
-          <div className="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-4">
-            <div className="flex items-center justify-between text-slate-400 text-xs mb-1">
-              <span>Activation Vouchers</span>
-              <Ticket className="w-4 h-4 text-rose-400" />
-            </div>
-            <div className="text-2xl font-extrabold text-white font-mono">
-              {activationCodes.length}
-            </div>
-            <div className="text-[11px] text-rose-400/80 mt-1">
-              Ready for client redemption
-            </div>
-          </div>
         </div>
 
         {/* Sub-Navigation Tabs */}
-        <div className="flex items-center gap-2 border-b border-slate-800 pb-2 overflow-x-auto flex-wrap sm:flex-nowrap">
+        <div className="grid grid-cols-4 gap-1.5 border-b border-slate-800 pb-2 sm:flex sm:gap-2">
           <button
             onClick={() => setAdminTab('allocate')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
+            className={`min-w-0 justify-center px-2 sm:px-4 py-2.5 rounded-xl text-[11px] sm:text-xs font-bold transition flex items-center gap-1.5 sm:gap-2 ${
               adminTab === 'allocate'
                 ? 'bg-indigo-600 text-white shadow-sm'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
             <Coins className="w-3.5 h-3.5" />
-            <span>Give Credits to User</span>
+            <span>Allocate</span>
           </button>
 
           <button
             onClick={() => setAdminTab('users')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
+            className={`min-w-0 justify-center px-2 sm:px-4 py-2.5 rounded-xl text-[11px] sm:text-xs font-bold transition flex items-center gap-1.5 sm:gap-2 ${
               adminTab === 'users'
                 ? 'bg-indigo-600 text-white shadow-sm'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>Manage Users ({users.length})</span>
+            <span>Users ({clientUsers.length})</span>
+          </button>
+
+          <button
+            onClick={() => setAdminTab('keys')}
+            className={`min-w-0 justify-center px-2 sm:px-4 py-2.5 rounded-xl text-[11px] sm:text-xs font-bold transition flex items-center gap-1.5 sm:gap-2 ${
+              adminTab === 'keys'
+                ? 'bg-indigo-600 text-white shadow-sm'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+            }`}
+          >
+            <KeyRound className="w-3.5 h-3.5" />
+            <span>Purchase Keys</span>
           </button>
 
           <button
             onClick={() => setAdminTab('logs')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
+            className={`min-w-0 justify-center px-2 sm:px-4 py-2.5 rounded-xl text-[11px] sm:text-xs font-bold transition flex items-center gap-1.5 sm:gap-2 ${
               adminTab === 'logs'
                 ? 'bg-indigo-600 text-white shadow-sm'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
             <Clock className="w-3.5 h-3.5" />
-            <span>Audit & Credit Logs ({transactions.length})</span>
+            <span>Activity ({transactions.length})</span>
           </button>
         </div>
 
         {/* Tab 1: GIVE CREDITS TO USER (Core Requirement) */}
         {adminTab === 'allocate' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6" id="give-credits-panel">
+          <div className="grid grid-cols-1 gap-4 sm:gap-6" id="give-credits-panel">
             {/* Credit Allocation Form (Left 2 columns) */}
-            <div className="lg:col-span-2 bg-slate-800/60 border border-slate-700/70 rounded-2xl p-4 sm:p-6 space-y-5 sm:space-y-6">
+            <div className="bg-slate-800/60 border border-slate-700/70 rounded-2xl p-4 sm:p-6 space-y-5 sm:space-y-6">
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
                   <Coins className="w-5 h-5 text-amber-400" />
@@ -296,12 +353,13 @@ export const AdminPanel: React.FC = () => {
                     Select Recipient User
                   </label>
                   <select
-                    value={selectedUserId}
+                    value={selectedUser?.id || ''}
                     onChange={e => setSelectedUserId(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-xs text-white font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
                     id="select-credit-recipient"
                   >
-                    {users.map(u => (
+                    {clientUsers.length === 0 && <option value="">No client accounts</option>}
+                    {clientUsers.map(u => (
                       <option key={u.id} value={u.id}>
                         {u.name} ({u.email}) — Current Balance: {u.credits} Credits
                       </option>
@@ -367,16 +425,17 @@ export const AdminPanel: React.FC = () => {
                 </div>
 
                 {/* Submit Action */}
-                <div className="pt-2 flex items-center justify-between">
+                <div className="pt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                   <div className="text-xs text-slate-400">
                     New balance will be:{' '}
                     <span className="font-bold text-amber-400 font-mono">
-                      {selectedUser.credits + creditAmount} credits
+                      {(selectedUser?.credits ?? 0) + creditAmount} credits
                     </span>
                   </div>
 
                   <button
                     type="submit"
+                    disabled={!selectedUser}
                     className="flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold text-xs bg-amber-400 hover:bg-amber-300 text-slate-950 transition shadow-lg shadow-amber-400/20 active:scale-98"
                     id="btn-confirm-give-credits"
                   >
@@ -394,119 +453,6 @@ export const AdminPanel: React.FC = () => {
               </form>
             </div>
 
-            {/* Recipient User Preview Card (Right column) */}
-            <div className="bg-slate-800/60 border border-slate-700/70 rounded-2xl p-4 sm:p-6 flex flex-col justify-between space-y-4">
-              <div>
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-4">
-                  Selected User Profile
-                </h4>
-
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-purple-600 to-indigo-600 text-white font-bold flex items-center justify-center text-lg shadow-md">
-                    {selectedUser.name.charAt(0)}
-                  </div>
-                  <div>
-                    <h5 className="font-bold text-sm text-white">{selectedUser.name}</h5>
-                    <p className="text-xs text-slate-400">{selectedUser.email}</p>
-                  </div>
-                </div>
-
-                <div className="space-y-2.5 text-xs">
-                  <div className="flex justify-between py-2 border-b border-slate-700/50">
-                    <span className="text-slate-400">Current Credits:</span>
-                    <span className="font-bold font-mono text-amber-400 text-sm">
-                      {selectedUser.credits}
-                    </span>
-                  </div>
-                  <div className="flex justify-between py-2 border-b border-slate-700/50">
-                    <span className="text-slate-400">Total Scans Run:</span>
-                    <span className="font-bold font-mono text-white">
-                      {selectedUser.totalScans}
-                    </span>
-                  </div>
-                  <div className="flex justify-between py-2 border-b border-slate-700/50">
-                    <span className="text-slate-400">Active Plan:</span>
-                    <span className="font-medium text-slate-300">
-                      {selectedUser.planName}
-                    </span>
-                  </div>
-                  <div className="flex justify-between py-2">
-                    <span className="text-slate-400">Member Since:</span>
-                    <span className="font-mono text-slate-400">
-                      {selectedUser.createdAt}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Delete Action if eligible */}
-              {selectedUser.id !== currentUser.id && selectedUser.role !== 'admin' && (
-                <div className="pt-4 border-t border-slate-700/60">
-                  <button
-                    type="button"
-                    onClick={() => setUserToDelete(selectedUser)}
-                    className="w-full py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-semibold transition flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                    <span>Delete User Account</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="mt-6 bg-slate-800/60 border border-slate-700/70 rounded-2xl p-4 sm:p-6 space-y-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <Ticket className="w-4 h-4 text-rose-400" />
-                    <span>Voucher Visibility Controls</span>
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Toggle codes on or off. Only active codes are shown to users in the redemption page.
-                  </p>
-                </div>
-                <span className="text-[10px] font-bold px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
-                  {activationCodes.filter(code => code.isActive).length} active
-                </span>
-              </div>
-
-              <div className="space-y-3">
-                {activationCodes.map(code => (
-                  <div key={code.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2.5">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-sm font-bold text-white">{code.code}</span>
-                        <span className="text-[10px] text-amber-300 font-semibold">+{code.credits} credits</span>
-                        {code.isActive ? (
-                          <span className="text-[10px] rounded-full bg-emerald-500/15 text-emerald-300 px-1.5 py-0.5 border border-emerald-500/20">
-                            Active
-                          </span>
-                        ) : (
-                          <span className="text-[10px] rounded-full bg-slate-700 text-slate-300 px-1.5 py-0.5 border border-slate-600">
-                            Inactive
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-1">
-                        Used {code.usedCount} / {code.maxUses} • {code.note || 'Admin created code'}
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => toggleCodeActivation(code.id)}
-                      className={`px-3 py-2 rounded-lg text-[11px] font-bold border transition ${
-                        code.isActive
-                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25'
-                          : 'bg-slate-700 text-slate-200 border-slate-600 hover:bg-slate-600'
-                      }`}
-                    >
-                      {code.isActive ? 'Disable' : 'Enable'}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
         )}
 
@@ -533,7 +479,7 @@ export const AdminPanel: React.FC = () => {
                   onClick={() => {
                     setNewUserName('');
                     setNewUserEmail('');
-                    setNewUserCredits(25);
+                    setNewUserCredits(0);
                     setNewUserPlan('Standard Verified Plan');
                     setIsAddingUser(true);
                   }}
@@ -547,7 +493,86 @@ export const AdminPanel: React.FC = () => {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
+            <div className="divide-y divide-slate-700/60 md:hidden">
+              {filteredUsers.map(user => (
+                <article key={user.id} className="space-y-3 p-4">
+                  <div className="flex min-w-0 items-start gap-3">
+                    {user.photoURL ? (
+                      <img src={user.photoURL} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" referrerPolicy="no-referrer" />
+                    ) : (
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-sm font-bold text-white">
+                        {user.name.charAt(0)}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <h3 className="max-w-full truncate text-sm font-bold text-white">{user.name}</h3>
+                        {user.role === 'admin' && <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">Admin</span>}
+                        {user.id === currentUser.id && <span className="rounded bg-indigo-500/15 px-1.5 py-0.5 text-[10px] font-bold text-indigo-300">You</span>}
+                      </div>
+                      <p className="mt-0.5 break-all text-[11px] text-slate-400">{user.email}</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 rounded-lg bg-slate-900/70 px-3 py-2 text-[11px]">
+                    <div>
+                      <span className="block text-slate-500">Credits</span>
+                      <span className="font-mono font-bold text-amber-300">{user.credits}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-500">Scans</span>
+                      <span className="font-mono text-slate-200">{user.totalScans}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-500">Status</span>
+                      <span className={user.emailVerified ? 'text-emerald-300' : 'text-amber-300'}>
+                        {user.emailVerified ? 'Verified' : 'Unverified'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedUserId(user.id);
+                        setAdminTab('allocate');
+                      }}
+                      className="min-h-10 flex-1 rounded-lg bg-amber-400/15 px-3 text-xs font-semibold text-amber-200"
+                    >
+                      <Plus className="mr-1 inline h-3.5 w-3.5" />Credit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingUser(user);
+                        setEditName(user.name);
+                        setEditCredits(user.credits);
+                        setEditPlan(user.planName || 'Standard Verified Plan');
+                        setEditExpiry(user.planExpiry || '2027-12-31');
+                      }}
+                      className="min-h-10 flex-1 rounded-lg bg-indigo-500/15 px-3 text-xs font-semibold text-indigo-200"
+                    >
+                      <Edit3 className="mr-1 inline h-3.5 w-3.5" />Edit
+                    </button>
+                    {user.id !== currentUser.id && user.role !== 'admin' && (
+                      <button
+                        type="button"
+                        onClick={() => setUserToDelete(user)}
+                        className="min-h-10 flex-1 rounded-lg bg-rose-500/15 px-3 text-xs font-semibold text-rose-200"
+                      >
+                        <Trash2 className="mr-1 inline h-3.5 w-3.5" />Delete
+                      </button>
+                    )}
+                  </div>
+                </article>
+              ))}
+              {filteredUsers.length === 0 && (
+                <p className="p-6 text-center text-xs text-slate-400">No users match this search.</p>
+              )}
+            </div>
+
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="bg-slate-900/60 border-b border-slate-700 text-slate-400 text-[11px] font-bold">
@@ -662,6 +687,138 @@ export const AdminPanel: React.FC = () => {
           </div>
         )}
 
+        {adminTab === 'keys' && (
+          <section className="space-y-5" id="purchase-keys-panel">
+            <div>
+              <h2 className="text-lg font-bold text-white">Purchase Keys</h2>
+              <p className="text-xs text-slate-400 mt-1">Create keys with credits inside. Each key is intended for one redemption.</p>
+            </div>
+
+            <div className="bg-slate-800/60 border border-slate-700/70 rounded-2xl p-4 sm:p-6 space-y-5">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-amber-400" />
+                Generate Keys
+              </h3>
+              <form onSubmit={handleGeneratePurchaseKeys} className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 items-end">
+                <label className="block text-xs text-slate-300 space-y-1.5">
+                  <span>Credits per key</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100000"
+                    step="1"
+                    required
+                    value={keyCredits}
+                    onChange={event => setKeyCredits(Math.max(1, Number.parseInt(event.target.value, 10) || 1))}
+                    className="hide-number-steppers w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </label>
+                <label className="block text-xs text-slate-300 space-y-1.5">
+                  <span>How many</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    step="1"
+                    required
+                    value={keyQuantity}
+                    onChange={event => setKeyQuantity(Math.min(100, Math.max(1, Number.parseInt(event.target.value, 10) || 1)))}
+                    className="hide-number-steppers w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </label>
+                <label className="block text-xs text-slate-300 space-y-1.5">
+                  <span>Note (optional)</span>
+                  <input
+                    type="text"
+                    maxLength={120}
+                    value={keyNote}
+                    onChange={event => setKeyNote(event.target.value)}
+                    placeholder="e.g. Starter pack"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={isGeneratingKeys}
+                  className="w-full px-4 py-2.5 rounded-xl text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-500 transition flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  <Plus className="w-4 h-4" />
+                  {isGeneratingKeys ? 'Generating...' : 'Generate'}
+                </button>
+              </form>
+              {generatedKeysMessage && <p role="status" className="text-xs text-emerald-300">{generatedKeysMessage}</p>}
+            </div>
+
+            <div className="bg-slate-800/60 border border-slate-700/70 rounded-2xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-700 flex items-center justify-between">
+                <h3 className="text-sm font-bold text-white">All Keys ({purchaseKeys.length})</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[760px] text-left text-xs">
+                  <thead>
+                    <tr className="bg-slate-900/60 border-b border-slate-700 text-slate-400 text-[11px] font-bold">
+                      <th className="py-3 px-4">Key</th>
+                      <th className="py-3 px-4">Credits</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4">Redeemed By</th>
+                      <th className="py-3 px-4">Note</th>
+                      <th className="py-3 px-4"><span className="sr-only">Actions</span></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-700/60 text-slate-300">
+                    {purchaseKeys.map(purchaseKey => {
+                      const isRedeemed = purchaseKey.usedCount >= purchaseKey.maxUses || !!purchaseKey.redeemedByUserId;
+                      return (
+                        <tr key={purchaseKey.id} className="hover:bg-slate-750 transition">
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-2 font-mono text-[11px]">
+                              <span className="whitespace-nowrap">{purchaseKey.key}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyPurchaseKey(purchaseKey.id, purchaseKey.key)}
+                                title="Copy purchase key"
+                                aria-label={`Copy purchase key ${purchaseKey.key}`}
+                                className="p-1 text-slate-500 hover:text-white transition"
+                              >
+                                <Copy className="w-3.5 h-3.5" />
+                              </button>
+                              {copiedPurchaseKeyId === purchaseKey.id && <span className="text-[10px] text-emerald-300">Copied</span>}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 font-mono">{purchaseKey.credits}</td>
+                          <td className="py-3 px-4">
+                            <span className={`px-2 py-1 rounded-full text-[10px] font-semibold ${isRedeemed ? 'bg-slate-700 text-slate-300' : purchaseKey.isActive ? 'bg-emerald-400/15 text-emerald-300' : 'bg-rose-400/15 text-rose-300'}`}>
+                              {isRedeemed ? 'Already Redeemed' : purchaseKey.isActive ? 'Available' : 'Disabled'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-slate-400">{purchaseKey.redeemedByEmail || '—'}</td>
+                          <td className="py-3 px-4 text-slate-400 max-w-[180px] truncate">{purchaseKey.note || '—'}</td>
+                          <td className="py-3 px-4 text-right">
+                            <button
+                              type="button"
+                              onClick={() => void handleDeletePurchaseKey(purchaseKey.id, purchaseKey.key)}
+                              title="Delete purchase key"
+                              aria-label={`Delete purchase key ${purchaseKey.key}`}
+                              className="p-1.5 text-slate-500 hover:text-rose-300 transition"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {purchaseKeys.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="py-10 px-4 text-center text-slate-500">No purchase keys yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* Tab 4: AUDIT & TRANSACTION LOGS */}
         {adminTab === 'logs' && (
           <div className="bg-slate-800/60 border border-slate-700/70 rounded-2xl overflow-hidden">
@@ -690,7 +847,7 @@ export const AdminPanel: React.FC = () => {
                   {transactions.map(tx => (
                     <tr key={tx.id} className="hover:bg-slate-750 transition">
                       <td className="py-3.5 px-5 text-slate-400 font-mono text-[11px]">
-                        {tx.date}
+                        {formatActivityTimestamp(tx.timestamp, tx.date)}
                       </td>
                       <td className="py-3.5 px-4 font-semibold text-white">
                         {tx.userName}
@@ -820,7 +977,7 @@ export const AdminPanel: React.FC = () => {
                   try {
                     await deleteUser(userToDelete.id);
                     if (selectedUserId === userToDelete.id) {
-                      setSelectedUserId(currentUser.id);
+                      setSelectedUserId('');
                     }
                     setUserToDelete(null);
                   } finally {
@@ -878,7 +1035,7 @@ export const AdminPanel: React.FC = () => {
                     setIsAddingUser(false);
                     setNewUserName('');
                     setNewUserEmail('');
-                    setNewUserCredits(25);
+                    setNewUserCredits(0);
                   }
                 } finally {
                   setIsCreatingUser(false);

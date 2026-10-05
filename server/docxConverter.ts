@@ -9,6 +9,22 @@ import JSZip from 'jszip';
 
 const execFileAsync = promisify(execFile);
 
+function findGeneratedPdf(directory: string): string | undefined {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isFile() && entry.name.toLowerCase().endsWith('.pdf')) {
+      try {
+        if (fs.statSync(entryPath).size > 0) return entryPath;
+      } catch {}
+    }
+    if (entry.isDirectory() && !entry.name.startsWith('profile')) {
+      const nestedPdf = findGeneratedPdf(entryPath);
+      if (nestedPdf) return nestedPdf;
+    }
+  }
+  return undefined;
+}
+
 export interface ConvertDocxResult {
   success: boolean;
   pdfBase64?: string;
@@ -130,56 +146,44 @@ export async function convertDocxToPdf(docxBase64: string, originalFileName = 'd
     }
     fs.writeFileSync(inputDocxPath, sourceBuffer);
 
-    // Run headless LibreOffice conversion with an isolated user profile.
-    // On Windows, the profile path must be a valid file:// URL, not a raw Windows path.
-    const userInstallationUrl = pathToFileURL(profileDir).href;
-    const args = [
-      '--headless',
-      '--nologo',
-      '--norestore',
-      `-env:UserInstallation=${userInstallationUrl}`,
-      '--convert-to',
-      'pdf:writer_pdf_Export',
-      '--outdir',
-      tmpDir,
-      inputDocxPath,
-    ];
+    // Retry the default export filter even when LibreOffice exits successfully
+    // but fails to create its output file.
+    const exportFilters = ['pdf:writer_pdf_Export', 'pdf'];
+    let generatedPdfPath: string | undefined;
+    let lastConversionDiagnostic = '';
 
-    try {
-      await execFileAsync(libreOfficeBin, args, { timeout: 60000 });
-    } catch (firstError: any) {
-      // Some Windows LibreOffice builds reject the explicit export filter for a
-      // document that the default Writer importer can still load.
-      console.warn('LibreOffice explicit PDF filter failed; retrying with default filter:', firstError?.message);
-      const retryProfileDir = path.join(tmpDir, 'retry-profile');
-      fs.mkdirSync(retryProfileDir, { recursive: true });
-      const retryArgs = [
+    for (const [attemptIndex, exportFilter] of exportFilters.entries()) {
+      const attemptProfileDir = path.join(tmpDir, `profile-${attemptIndex + 1}`);
+      fs.mkdirSync(attemptProfileDir, { recursive: true });
+      const args = [
         '--headless',
         '--nologo',
         '--norestore',
-        `-env:UserInstallation=${pathToFileURL(retryProfileDir).href}`,
+        `-env:UserInstallation=${pathToFileURL(attemptProfileDir).href}`,
         '--convert-to',
-        'pdf',
+        exportFilter,
         '--outdir',
         tmpDir,
         inputDocxPath,
       ];
-      await execFileAsync(libreOfficeBin, retryArgs, { timeout: 60000 });
-    }
 
-    // Find the generated PDF in the output directory
-    let generatedPdfPath = outputPdfPath;
-    if (!fs.existsSync(generatedPdfPath)) {
-      const files = fs.readdirSync(tmpDir);
-      const pdfFile = files.find(f => f.toLowerCase().endsWith('.pdf'));
-      if (pdfFile) {
-        generatedPdfPath = path.join(tmpDir, pdfFile);
-      } else {
-        throw new Error('LibreOffice did not produce any PDF output.');
+      try {
+        const result = await execFileAsync(libreOfficeBin, args, { timeout: 90000, maxBuffer: 10 * 1024 * 1024 });
+        lastConversionDiagnostic = `${result.stdout || ''} ${result.stderr || ''}`.trim();
+      } catch (conversionError: any) {
+        lastConversionDiagnostic = `${conversionError?.stdout || ''} ${conversionError?.stderr || ''} ${conversionError?.message || ''}`.trim();
       }
+
+      generatedPdfPath = findGeneratedPdf(tmpDir);
+      if (generatedPdfPath) break;
+      console.warn(`LibreOffice ${exportFilter} attempt produced no PDF:`, lastConversionDiagnostic || 'no output');
     }
 
-    const pdfBuffer = fs.readFileSync(generatedPdfPath);
+    if (!generatedPdfPath) {
+      throw new Error(`LibreOffice did not produce any PDF output. ${lastConversionDiagnostic}`.trim());
+    }
+
+    const pdfBuffer = fs.readFileSync(generatedPdfPath || outputPdfPath);
     let pageCount = 1;
     try {
       const pdfDoc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });

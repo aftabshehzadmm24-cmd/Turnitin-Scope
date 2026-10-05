@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { User, ScanReport, ActivationCode, CreditTransaction, ScanMode, HighlightedSnippet, MatchedSource } from '../types';
+import { User, ScanReport, ActivationCode, PurchaseKey, CreditTransaction, ScanMode, HighlightedSnippet, MatchedSource } from '../types';
 import { cleanText, generateSmartSnippets } from '../utils/documentParser';
 import { generateSourcesForDocument } from '../utils/dynamicManuscriptEngine';
 import {
@@ -12,25 +12,49 @@ import {
   sendVerificationToCurrentUser,
   resetPasswordForEmail,
   onAuthStateChanged,
-  getActiveSessionUser,
   safeSetDoc,
   safeGetDoc,
   safeGetDocs,
   cleanFirestoreData,
   updateFirebaseUserProfile,
   FirebaseUser,
+  ADMIN_EMAIL,
 } from '../lib/firebase';
-import { doc, collection, deleteDoc, onSnapshot, query, where } from 'firebase/firestore';
-import { ref, deleteObject } from 'firebase/storage';
-import { storage } from '../lib/firebase';
+import { doc, collection, deleteDoc, onSnapshot, query, runTransaction, setDoc, where } from 'firebase/firestore';
 import { buildUserFromAuthProfile } from '../lib/userProfiles';
+import { deleteReportFile, getReportFile, pruneExpiredReportFiles, saveReportFile } from '../utils/reportFileStore';
 
 export { buildUserFromAuthProfile };
 
 export const isAdminEmail = (email?: string | null): boolean => {
   if (!email) return false;
   const em = email.trim().toLowerCase();
-  return em === 'admin@turnitscope.com';
+  return em === ADMIN_EMAIL;
+};
+
+const addOneCalendarMonth = (date: Date): Date => {
+  const result = new Date(date);
+  const dayOfMonth = result.getDate();
+  result.setDate(1);
+  result.setMonth(result.getMonth() + 1);
+  const lastDayOfMonth = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
+  result.setDate(Math.min(dayOfMonth, lastDayOfMonth));
+  return result;
+};
+
+const formatPakistanDateTime = (value: Date | number = Date.now()): string => {
+  const date = value instanceof Date ? value : new Date(value);
+  const formatted = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Karachi',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date);
+  return `${formatted} PKT`;
 };
 
 interface AppContextType {
@@ -38,6 +62,7 @@ interface AppContextType {
   users: User[];
   reports: ScanReport[];
   activationCodes: ActivationCode[];
+  purchaseKeys: PurchaseKey[];
   transactions: CreditTransaction[];
   activePanel: 'client' | 'admin';
   activeTab: 'dashboard' | 'reports' | 'redeem';
@@ -64,12 +89,14 @@ interface AppContextType {
   setSelectedReport: (report: ScanReport | null) => void;
   setIsProfileModalOpen: (open: boolean) => void;
   setNotification: (notif: { message: string; type: 'success' | 'error' | 'info' } | null) => void;
-  giveCredits: (userId: string, amount: number, note?: string) => boolean;
+  giveCredits: (userId: string, amount: number, note?: string) => Promise<boolean>;
   deleteUser: (userId: string) => Promise<void>;
-  redeemCode: (codeStr: string) => { success: boolean; message: string; creditsAdded?: number };
   generateCode: (codeStr: string, credits: number, maxUses?: number, note?: string) => ActivationCode;
   deleteCode: (codeId: string) => void;
   toggleCodeActivation: (codeId: string) => void;
+  createPurchaseKey: (key: string, credits: number, note?: string) => Promise<PurchaseKey | null>;
+  deletePurchaseKey: (keyId: string) => Promise<boolean>;
+  redeemPurchaseKey: (key: string) => Promise<boolean>;
   runScan: (options: {
     fileName: string;
     mode: ScanMode;
@@ -82,11 +109,14 @@ interface AppContextType {
     fileData?: string;
     storagePath?: string;
     fileMimeType?: string;
+    sourceFileData?: string;
+    sourceFileMimeType?: string;
+    sourceFileSize?: number;
     htmlContent?: string;
     htmlPages?: string[];
     pageCount?: number;
   }) => Promise<{ success: boolean; error?: string; report?: ScanReport }>;
-  deleteReport: (reportId: string) => void;
+  deleteReport: (reportId: string) => Promise<void>;
   updateCurrentUser: (updates: Partial<User>) => Promise<void>;
   addUserAsAdmin: (userData: {
     name: string;
@@ -204,12 +234,34 @@ const sanitizePersistedReports = (items: ScanReport[] = [], userId?: string): Sc
   );
 };
 
+const hydrateReportFiles = async (items: ScanReport[]): Promise<ScanReport[]> => Promise.all(
+  items.map(async report => {
+    if (report.fileData) return report;
+    try {
+      const fileData = await getReportFile(report.id);
+      return fileData ? { ...report, fileData } : report;
+    } catch (error) {
+      console.warn('Could not restore the local original document for report:', error);
+      return report;
+    }
+  })
+);
+
+const preserveReportFiles = (incomingReports: ScanReport[], existingReports: ScanReport[]): ScanReport[] => {
+  const existingFiles = new Map(existingReports.map(report => [report.id, report.fileData]));
+  return incomingReports.map(report => ({
+    ...report,
+    fileData: report.fileData || existingFiles.get(report.id),
+  }));
+};
+
 const INITIAL_CURRENT_USER: User = {
   id: '',
   name: 'Academic User',
   email: '',
   role: 'client',
   credits: 0,
+  usedCredits: 0,
   planName: 'Standard Tier',
   planExpiry: '2027-12-31',
   totalScans: 0,
@@ -220,12 +272,13 @@ const INITIAL_CURRENT_USER: User = {
 export const ADMIN_USER_INITIAL: User = {
   id: 'usr-admin-turnitscope',
   name: 'TurnitScope Admin',
-  email: 'admin@turnitscope.com',
+  email: ADMIN_EMAIL,
   role: 'admin',
-  credits: 5000,
+  credits: 0,
+  usedCredits: 0,
   planName: 'Master Administrator',
   planExpiry: '2030-12-31',
-  totalScans: 142,
+  totalScans: 0,
   createdAt: '2026-01-01',
   emailVerified: true,
   authProvider: 'password',
@@ -314,6 +367,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return {
         ...parsed,
         role: isAdminEmail(parsed.email) ? 'admin' : 'client',
+        credits: isAdminEmail(parsed.email) ? 0 : parsed.credits,
+        usedCredits: isAdminEmail(parsed.email) ? 0 : (parsed.usedCredits ?? 0),
+        totalScans: isAdminEmail(parsed.email) ? 0 : parsed.totalScans,
       };
     } catch {
       return INITIAL_CURRENT_USER;
@@ -328,13 +384,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         list = JSON.parse(saved);
       } catch {}
     }
-    const sanitized = list
+    const sanitized: User[] = list
       .filter(u => !isRemovedUser(u))
       .map(u => ({
         ...u,
         role: (isAdminEmail(u.email) ? 'admin' : 'client') as 'admin' | 'client',
+        credits: isAdminEmail(u.email) ? 0 : u.credits,
+        usedCredits: isAdminEmail(u.email) ? 0 : (u.usedCredits ?? 0),
       }));
-    if (!sanitized.some(u => u.email.toLowerCase() === 'admin@turnitscope.com')) {
+    if (!sanitized.some(u => u.email.toLowerCase() === ADMIN_EMAIL)) {
       sanitized.unshift(ADMIN_USER_INITIAL);
     }
     try {
@@ -346,16 +404,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [reports, setReports] = useState<ScanReport[]>([]);
 
   useEffect(() => {
+    void pruneExpiredReportFiles().catch(error => {
+      console.warn('Could not prune expired original documents from IndexedDB:', error);
+    });
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
     const userId = currentUser?.id;
     if (!userId) {
       setReports([]);
-      return;
+      return () => {
+        isCancelled = true;
+      };
     }
 
     const saved = localStorage.getItem(getReportsStorageKey(userId));
     if (!saved) {
       setReports([]);
-      return;
+      return () => {
+        isCancelled = true;
+      };
     }
 
     try {
@@ -363,9 +432,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const cleaned = sanitizePersistedReports(parsed, userId);
       setReports(cleaned);
       localStorage.setItem(getReportsStorageKey(userId), JSON.stringify(cleaned));
+      void hydrateReportFiles(cleaned).then(hydratedReports => {
+        if (isCancelled || currentUser?.id !== userId) return;
+        setReports(previousReports => preserveReportFiles(hydratedReports, previousReports));
+      });
     } catch {
       setReports([]);
     }
+
+    return () => {
+      isCancelled = true;
+    };
   }, [currentUser?.id]);
 
   const [activationCodes, setActivationCodes] = useState<ActivationCode[]>(() => {
@@ -376,6 +453,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return INITIAL_CODES;
     }
   });
+  const [purchaseKeys, setPurchaseKeys] = useState<PurchaseKey[]>([]);
 
   const [transactions, setTransactions] = useState<CreditTransaction[]>(() => {
     try {
@@ -420,7 +498,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const handleSetActivePanel = (panel: 'client' | 'admin') => {
     if (panel === 'admin' && !isAdminEmail(currentUser?.email)) {
       setNotification({
-        message: 'Access Denied: Only admin@turnitscope.com has administrative access.',
+        message: `Access Denied: Only ${ADMIN_EMAIL} has administrative access.`,
         type: 'error',
       });
       setActivePanel('client');
@@ -464,7 +542,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       });
 
-      if (!fsUsers.some(u => u.email.toLowerCase() === 'admin@turnitscope.com')) {
+      if (!fsUsers.some(u => u.email.toLowerCase() === ADMIN_EMAIL)) {
         fsUsers.unshift(ADMIN_USER_INITIAL);
       }
 
@@ -511,24 +589,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const safeReports = pruneExpiredReports(reports, currentUser.id).map(r => ({
           ...r,
           userId: r.userId || currentUser.id,
+          fileData: undefined,
         }));
         localStorage.setItem(getReportsStorageKey(currentUser.id), JSON.stringify(safeReports));
       } catch (e) {
         console.warn('Could not persist reports to localStorage:', e);
       }
-      return;
+
+      const nextExpiry = reports.reduce<number | undefined>((earliest, report) => {
+        const expiresAt = report.expiresAt ?? (report.timestamp ? report.timestamp + ONE_DAY_MS : undefined);
+        return expiresAt === undefined ? earliest : earliest === undefined ? expiresAt : Math.min(earliest, expiresAt);
+      }, undefined);
+
+      if (nextExpiry === undefined) return;
+
+      const expiryTimer = setTimeout(() => {
+        const now = Date.now();
+        const newlyExpired = reports.filter(report => {
+          const expiresAt = report.expiresAt ?? (report.timestamp ? report.timestamp + ONE_DAY_MS : undefined);
+          return expiresAt !== undefined && expiresAt <= now;
+        });
+        const cleanup: Promise<unknown>[] = [];
+        newlyExpired.forEach(report => {
+          cleanup.push(deleteDoc(doc(db, 'reports', report.id)));
+          cleanup.push(deleteReportFile(report.id));
+          if (report.fileMetadataId) {
+            cleanup.push(deleteDoc(doc(db, 'files', report.fileMetadataId)));
+          }
+        });
+        void Promise.allSettled(cleanup);
+        setReports(previous => previous.filter(report => {
+          const expiresAt = report.expiresAt ?? (report.timestamp ? report.timestamp + ONE_DAY_MS : undefined);
+          return expiresAt === undefined || expiresAt > now;
+        }));
+      }, Math.max(0, nextExpiry - Date.now()));
+
+      return () => clearTimeout(expiryTimer);
     }
 
     let isCancelled = false;
 
     const purgeExpiredReportFiles = async () => {
       for (const report of expired) {
-        if (!report.storagePath) continue;
-        try {
-          await deleteObject(ref(storage, report.storagePath));
-        } catch (error) {
-          console.warn('Could not delete expired file from Firebase Storage:', error);
+        await deleteReportFile(report.id).catch(error => {
+          console.warn('Could not remove expired original document from IndexedDB:', error);
+        });
+        if (report.fileMetadataId) {
+          await deleteDoc(doc(db, 'files', report.fileMetadataId)).catch(error => {
+            console.warn('Could not delete expired file metadata from Firestore:', error);
+          });
         }
+        await deleteDoc(doc(db, 'reports', report.id)).catch(error => {
+          console.warn('Could not delete expired report metadata from Firestore:', error);
+        });
       }
 
       if (isCancelled) return;
@@ -582,6 +695,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [transactions]);
 
+  useEffect(() => {
+    if (!firebaseUser || !isAdminEmail(firebaseUser.email || currentUser.email)) {
+      setPurchaseKeys([]);
+      return;
+    }
+
+    return onSnapshot(
+      collection(db, 'purchase_keys'),
+      snapshot => {
+        snapshot.docs.forEach(docSnap => {
+          const data = docSnap.data();
+          const normalizedKey = typeof data.key === 'string' ? data.key.trim().toUpperCase() : '';
+          if (!normalizedKey || docSnap.id === normalizedKey) return;
+
+          const canonicalRef = doc(db, 'purchase_keys', normalizedKey);
+          void runTransaction(db, async transaction => {
+            const [legacySnapshot, canonicalSnapshot] = await Promise.all([
+              transaction.get(docSnap.ref),
+              transaction.get(canonicalRef),
+            ]);
+            if (!legacySnapshot.exists()) return;
+
+            if (!canonicalSnapshot.exists()) {
+              transaction.set(canonicalRef, { ...legacySnapshot.data(), key: normalizedKey });
+              transaction.delete(docSnap.ref);
+              return;
+            }
+
+            if (canonicalSnapshot.data().key === normalizedKey) {
+              transaction.delete(docSnap.ref);
+            }
+          }).catch(error => console.warn('Could not migrate legacy purchase key:', error));
+        });
+
+        const keys = snapshot.docs.map(docSnap => {
+          const data = docSnap.data();
+          return {
+            id: docSnap.id,
+            key: typeof data.key === 'string' ? data.key : '',
+            credits: typeof data.credits === 'number' ? data.credits : 0,
+            maxUses: typeof data.maxUses === 'number' ? data.maxUses : 1,
+            usedCount: typeof data.usedCount === 'number' ? data.usedCount : 0,
+            isActive: data.isActive !== false,
+            note: typeof data.note === 'string' ? data.note : '',
+            createdAt: typeof data.createdAt === 'string' ? data.createdAt : '',
+            createdBy: typeof data.createdBy === 'string' ? data.createdBy : '',
+            redeemedByEmail: typeof data.redeemedByEmail === 'string' ? data.redeemedByEmail : undefined,
+            redeemedByUserId: typeof data.redeemedByUserId === 'string' ? data.redeemedByUserId : undefined,
+            redeemedAt: typeof data.redeemedAt === 'string' ? data.redeemedAt : undefined,
+          } satisfies PurchaseKey;
+        });
+        keys.sort((first, second) => second.createdAt.localeCompare(first.createdAt));
+        setPurchaseKeys(keys);
+      },
+      error => console.warn('Purchase key listener notice:', error.message)
+    );
+  }, [firebaseUser, currentUser.email]);
+
   // Listen to Firebase Auth state & active institutional session
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
@@ -591,7 +762,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const userDocRef = doc(db, 'users', fbUser.uid);
         try {
           const userDocSnap = await safeGetDoc(userDocRef, 3500);
-          if (userDocSnap && userDocSnap.exists && userDocSnap.exists()) {
+          if (!userDocSnap) {
+            throw new Error('Could not load your profile from Firestore. Skipping profile creation.');
+          }
+          if (userDocSnap.exists && userDocSnap.exists()) {
             const data = userDocSnap.data() as User;
             const isUserAdmin = isAdminEmail(fbUser.email);
             const mergedUser: User = {
@@ -600,12 +774,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               name: fbUser.displayName || data.name || fbUser.email?.split('@')[0] || 'User',
               email: fbUser.email || data.email,
               role: (isUserAdmin ? 'admin' : 'client') as 'admin' | 'client',
+              credits: isUserAdmin ? 0 : (typeof data.credits === 'number' ? data.credits : 0),
+              usedCredits: isUserAdmin ? 0 : (typeof data.usedCredits === 'number' ? data.usedCredits : 0),
+              totalScans: isUserAdmin ? 0 : (typeof data.totalScans === 'number' ? data.totalScans : 0),
               emailVerified: fbUser.emailVerified,
               photoURL: fbUser.photoURL || data.photoURL,
               authProvider: fbUser.providerData?.[0]?.providerId === 'google.com' ? 'google' : 'password',
             };
             if (!isUserAdmin && data.role === 'admin') {
               safeSetDoc(userDocRef, { role: 'client' }, { merge: true });
+            }
+            if (isUserAdmin && (data.credits !== 0 || data.usedCredits !== 0 || data.totalScans !== 0)) {
+              safeSetDoc(userDocRef, { credits: 0, usedCredits: 0, totalScans: 0 }, { merge: true });
             }
             setCurrentUser(mergedUser);
             if (!isUserAdmin) {
@@ -641,20 +821,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               return [newUser, ...without];
             });
 
-            // Add initial welcome transaction
-            const welcomeTx: CreditTransaction = {
-              id: `tx-welcome-${Date.now()}`,
-              userId: newUser.id,
-              userName: newUser.name,
-              amount: isDefaultAdmin ? 5000 : 25,
-              balanceAfter: isDefaultAdmin ? 5000 : 25,
-              type: 'admin_grant',
-              note: isDefaultAdmin ? 'Administrator provisioning balance' : 'Welcome sign up bonus credits',
-              date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-              timestamp: Date.now(),
-            };
-            setTransactions(prev => [welcomeTx, ...prev]);
-
             if (isDefaultAdmin) {
               setActivePanel('admin');
             }
@@ -673,6 +839,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     fsUsers.push({
                       ...uData,
                       role: isAdminEmail(uData.email) ? 'admin' : 'client',
+                      credits: isAdminEmail(uData.email) ? 0 : (uData.credits ?? 0),
+                      usedCredits: isAdminEmail(uData.email) ? 0 : (uData.usedCredits ?? 0),
                     });
                   }
                 });
@@ -696,10 +864,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             name: fbUser.displayName || (isAdm ? 'TurnitScope Administrator' : fbUser.email?.split('@')[0]) || 'User',
             email: fbUser.email || '',
             role: isAdm ? 'admin' : 'client',
-            credits: isAdm ? 5000 : 25,
+            credits: 0,
             planName: isAdm ? 'Master Administrator' : 'Verified Account',
             planExpiry: '2030-12-31',
-            totalScans: isAdm ? 142 : 0,
+              totalScans: 0,
             createdAt: new Date().toISOString().split('T')[0],
             emailVerified: fbUser.emailVerified,
             photoURL: fbUser.photoURL || null,
@@ -711,44 +879,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
       } else {
-        // If not in Firebase Auth, check for active institutional local session
-        const localActive = getActiveSessionUser();
-        if (localActive) {
-          setFirebaseUser(localActive);
-          const cleanEmail = localActive.email?.toLowerCase() || '';
-          const isDefaultAdmin = isAdminEmail(cleanEmail);
-          const existing = users.find(u => u.email.toLowerCase() === cleanEmail);
-          if (existing) {
-            setCurrentUser({
-              ...existing,
-              role: isDefaultAdmin ? 'admin' : 'client',
-            });
-            if (isDefaultAdmin) {
-              setActivePanel('admin');
-            }
-          } else {
-            const newUser: User = {
-              id: localActive.uid,
-              name: localActive.displayName || (isDefaultAdmin ? 'TurnitScope Administrator' : cleanEmail.split('@')[0]) || 'Academic User',
-              email: cleanEmail,
-              role: isDefaultAdmin ? 'admin' : 'client',
-              credits: isDefaultAdmin ? 5000 : 25,
-              planName: isDefaultAdmin ? 'Master Administrator' : 'Standard Verified Plan',
-              planExpiry: '2030-12-31',
-              totalScans: isDefaultAdmin ? 142 : 0,
-              createdAt: new Date().toISOString().split('T')[0],
-              emailVerified: true,
-              authProvider: 'password',
-            };
-            setCurrentUser(newUser);
-            setUsers(prev => [newUser, ...prev]);
-            if (isDefaultAdmin) {
-              setActivePanel('admin');
-            }
-          }
-        } else {
-          setFirebaseUser(null);
-        }
+        setFirebaseUser(null);
+        setCurrentUser(INITIAL_CURRENT_USER);
+        setActivePanel('client');
       }
       setIsAuthLoading(false);
     });
@@ -761,6 +894,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let unsubUsers: (() => void) | undefined;
     let unsubCodes: (() => void) | undefined;
     let unsubTxns: (() => void) | undefined;
+    let unsubReports: (() => void) | undefined;
 
     // Only attach live listeners when auth is ready and user is authenticated per Firebase Skill
     if (!firebaseUser) {
@@ -770,6 +904,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const isCurrentAdmin = isAdminEmail(firebaseUser.email || currentUser.email) || currentUser.role === 'admin';
 
     try {
+      const userReportsQuery = query(
+        collection(db, 'reports'),
+        where('userId', '==', firebaseUser.uid)
+      );
+      unsubReports = onSnapshot(
+        userReportsQuery,
+        snapshot => {
+          const firestoreReports: ScanReport[] = [];
+          snapshot.docs.forEach(reportDoc => {
+            const data = reportDoc.data();
+            const storedExpiry = typeof data.expiresAt === 'number'
+              ? data.expiresAt
+              : typeof data.expiresAt?.toMillis === 'function'
+              ? data.expiresAt.toMillis()
+              : undefined;
+            const expiresAt = storedExpiry ?? (typeof data.timestamp === 'number'
+              ? data.timestamp + ONE_DAY_MS
+              : undefined);
+
+            if (expiresAt !== undefined && expiresAt <= Date.now()) {
+              deleteReportFile(reportDoc.id).catch(error => {
+                console.warn('Could not remove expired original document from IndexedDB:', error);
+              });
+              deleteDoc(reportDoc.ref).catch(error => {
+                console.warn('Could not delete expired report metadata from Firestore:', error);
+              });
+              if (data.fileMetadataId) {
+                deleteDoc(doc(db, 'files', data.fileMetadataId)).catch(error => {
+                  console.warn('Could not delete expired file metadata from Firestore:', error);
+                });
+              }
+              return;
+            }
+
+            firestoreReports.push({
+              ...data,
+              id: reportDoc.id,
+              fileData: undefined,
+            } as ScanReport);
+          });
+          const cleanedReports = sanitizePersistedReports(firestoreReports, firebaseUser.uid)
+            .sort((first, second) => (second.timestamp || 0) - (first.timestamp || 0));
+          setReports(previousReports => preserveReportFiles(cleanedReports, previousReports));
+          void hydrateReportFiles(cleanedReports).then(hydratedReports => {
+            setReports(previousReports => preserveReportFiles(hydratedReports, previousReports));
+          });
+          try {
+            localStorage.setItem(getReportsStorageKey(firebaseUser.uid), JSON.stringify(cleanedReports));
+          } catch (error) {
+            console.warn('Could not persist Firestore reports to localStorage:', error);
+          }
+        },
+        error => console.warn('Live reports subscription notice:', error.message)
+      );
+
       // 1. Live Users Collection Listener - strictly for administrators per security rules
       if (isCurrentAdmin) {
         unsubUsers = onSnapshot(
@@ -785,7 +974,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     name: d.name || (d.email ? d.email.split('@')[0] : 'Academic User'),
                     email: d.email || '',
                     role: isAdminEmail(d.email) ? 'admin' : (d.role || 'client'),
-                    credits: typeof d.credits === 'number' ? d.credits : 0,
+                    credits: isAdminEmail(d.email) ? 0 : (typeof d.credits === 'number' ? d.credits : 0),
+                    usedCredits: isAdminEmail(d.email) ? 0 : (typeof d.usedCredits === 'number' ? d.usedCredits : 0),
                     planName: d.planName || 'Standard Verified Plan',
                     planExpiry: d.planExpiry || '2027-12-31',
                     totalScans: typeof d.totalScans === 'number' ? d.totalScans : 0,
@@ -797,7 +987,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 }
               });
 
-              if (!fsUsers.some(u => u.email.toLowerCase() === 'admin@turnitscope.com')) {
+              if (!fsUsers.some(u => u.email.toLowerCase() === ADMIN_EMAIL)) {
                 fsUsers.unshift(ADMIN_USER_INITIAL);
               }
 
@@ -868,7 +1058,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   balanceAfter: typeof d.balanceAfter === 'number' ? d.balanceAfter : 0,
                   type: d.type || 'admin_grant',
                   note: d.note || '',
-                  date: d.date || new Date().toISOString().replace('T', ' ').substring(0, 16),
+                  date: d.date || formatPakistanDateTime(Date.now()),
                   timestamp: typeof d.timestamp === 'number' ? d.timestamp : Date.now(),
                 });
               }
@@ -892,6 +1082,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (unsubUsers) unsubUsers();
       if (unsubCodes) unsubCodes();
       if (unsubTxns) unsubTxns();
+      if (unsubReports) unsubReports();
     };
   }, [firebaseUser, currentUser.email, currentUser.role]);
 
@@ -911,7 +1102,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 name: d.name || (d.email ? d.email.split('@')[0] : 'Academic User'),
                 email: d.email || '',
                 role: isAdminEmail(d.email) ? 'admin' : (d.role || 'client'),
-                credits: typeof d.credits === 'number' ? d.credits : 0,
+                credits: isAdminEmail(d.email) ? 0 : (typeof d.credits === 'number' ? d.credits : 0),
+                usedCredits: isAdminEmail(d.email) ? 0 : (typeof d.usedCredits === 'number' ? d.usedCredits : 0),
                 planName: d.planName || 'Standard Verified Plan',
                 planExpiry: d.planExpiry || '2027-12-31',
                 totalScans: typeof d.totalScans === 'number' ? d.totalScans : 0,
@@ -922,7 +1114,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               });
             }
           });
-          if (!fsUsers.some(u => u.email.toLowerCase() === 'admin@turnitscope.com')) {
+          if (!fsUsers.some(u => u.email.toLowerCase() === ADMIN_EMAIL)) {
             fsUsers.unshift(ADMIN_USER_INITIAL);
           }
           setUsers(fsUsers);
@@ -976,7 +1168,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 balanceAfter: typeof d.balanceAfter === 'number' ? d.balanceAfter : 0,
                 type: d.type || 'admin_grant',
                 note: d.note || '',
-                date: d.date || new Date().toISOString().replace('T', ' ').substring(0, 16),
+                date: d.date || formatPakistanDateTime(Date.now()),
                 timestamp: typeof d.timestamp === 'number' ? d.timestamp : Date.now(),
               });
             }
@@ -1002,7 +1194,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const signInWithGoogleAuth = async () => {
     try {
       const result = await signInWithGoogle();
-      const newUser = buildUserFromAuthProfile({
+      const authProfile = {
         uid: result.user.uid,
         email: result.user.email,
         displayName: result.user.displayName,
@@ -1012,7 +1204,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           providerId: provider.providerId,
           email: provider.email,
         })),
-      });
+      };
+      const profileRef = doc(db, 'users', result.user.uid);
+      const profileSnapshot = await safeGetDoc(profileRef);
+      if (!profileSnapshot) {
+        throw new Error('Could not load your profile from Firestore. Please retry signing in.');
+      }
+      const existingProfile = profileSnapshot.exists() ? profileSnapshot.data() as User : null;
+      const generatedProfile = buildUserFromAuthProfile(authProfile);
+      const newUser: User = existingProfile
+        ? {
+            ...generatedProfile,
+            ...existingProfile,
+            id: result.user.uid,
+            name: result.user.displayName || existingProfile.name || generatedProfile.name,
+            email: result.user.email || existingProfile.email,
+            role: generatedProfile.role,
+            credits: isAdminEmail(result.user.email) ? 0 : (typeof existingProfile.credits === 'number' ? existingProfile.credits : 0),
+            usedCredits: isAdminEmail(result.user.email) ? 0 : (typeof existingProfile.usedCredits === 'number' ? existingProfile.usedCredits : 0),
+            totalScans: isAdminEmail(result.user.email) ? 0 : (existingProfile.totalScans ?? 0),
+            emailVerified: result.user.emailVerified,
+            photoURL: result.user.photoURL || existingProfile.photoURL || null,
+          }
+        : generatedProfile;
 
       setCurrentUser(newUser);
       setFirebaseUser(result.user);
@@ -1021,7 +1235,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return [newUser, ...without];
       });
       if (newUser.email) {
-        safeSetDoc(doc(db, 'users', newUser.id), newUser).catch(() => {});
+        await setDoc(profileRef, newUser, { merge: true });
       }
       await syncUsersFromFirestoreIfPossible();
       setActivePanel(newUser.role === 'admin' ? 'admin' : 'client');
@@ -1052,10 +1266,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         name: result.user.displayName || (isDefaultAdmin ? 'TurnitScope Administrator' : name.trim()) || cleanEmail.split('@')[0],
         email: cleanEmail,
         role: isDefaultAdmin ? 'admin' : 'client',
-        credits: isDefaultAdmin ? 5000 : 25,
+        credits: 0,
+        usedCredits: 0,
         planName: isDefaultAdmin ? 'Master Administrator' : 'Standard Verified Plan',
         planExpiry: isDefaultAdmin ? '2030-12-31' : '2027-12-31',
-        totalScans: isDefaultAdmin ? 142 : 0,
+        totalScans: 0,
         createdAt: new Date().toISOString().split('T')[0],
         emailVerified: true,
         photoURL: result.user.photoURL || null,
@@ -1071,27 +1286,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActivePanel('admin');
       }
 
-      // Add 25 bonus credits transaction
-      const welcomeTx: CreditTransaction = {
-        id: `tx-welcome-${Date.now()}`,
-        userId: newUser.id,
-        userName: newUser.name,
-        amount: isDefaultAdmin ? 5000 : 25,
-        balanceAfter: isDefaultAdmin ? 5000 : 25,
-        type: 'admin_grant',
-        note: isDefaultAdmin ? 'Administrator provisioning balance' : 'Welcome sign up bonus credits',
-        date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-        timestamp: Date.now(),
-      };
-      setTransactions(prev => [welcomeTx, ...prev]);
-
       // Attempt Firestore sync safely in background if online
-      safeSetDoc(doc(db, 'users', newUser.id), newUser);
+      await setDoc(doc(db, 'users', newUser.id), newUser);
 
       setNotification({
         message: isDefaultAdmin
           ? `Welcome Master Administrator (${newUser.email})!`
-          : `Account created for ${newUser.email}! 25 complimentary credits added.`,
+          : `Account created for ${newUser.email}.`,
         type: 'success',
       });
     } catch (err: unknown) {
@@ -1111,14 +1312,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setFirebaseUser(result.user);
       const cleanEmail = result.user.email?.toLowerCase() || email.trim().toLowerCase();
       const isDefaultAdmin = isAdminEmail(cleanEmail);
-      const existingUser = users.find(u => u.email.toLowerCase() === cleanEmail);
+      const profileSnapshot = await safeGetDoc(doc(db, 'users', result.user.uid));
+      const firestoreUser = profileSnapshot?.exists?.() ? profileSnapshot.data() as User : undefined;
+      const existingUser = firestoreUser || users.find(u => u.email.toLowerCase() === cleanEmail);
       if (existingUser) {
         const updated = {
           ...existingUser,
+          id: result.user.uid,
+          email: cleanEmail,
           role: (isDefaultAdmin ? 'admin' : 'client') as 'admin' | 'client',
+          credits: isDefaultAdmin ? 0 : (typeof existingUser.credits === 'number' ? existingUser.credits : 0),
+          usedCredits: isDefaultAdmin ? 0 : (typeof existingUser.usedCredits === 'number' ? existingUser.usedCredits : 0),
+          totalScans: isDefaultAdmin ? 0 : (existingUser.totalScans ?? 0),
         };
         setCurrentUser(updated);
+        setUsers(prev => [updated, ...prev.filter(user => user.id !== updated.id && user.email.toLowerCase() !== cleanEmail)]);
         if (isDefaultAdmin) {
+          safeSetDoc(doc(db, 'users', result.user.uid), { role: 'admin', credits: 0, usedCredits: 0, totalScans: 0 }, { merge: true });
           setActivePanel('admin');
         }
       } else {
@@ -1127,10 +1337,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           name: result.user.displayName || (isDefaultAdmin ? 'TurnitScope Administrator' : cleanEmail.split('@')[0]),
           email: cleanEmail,
           role: isDefaultAdmin ? 'admin' : 'client',
-          credits: isDefaultAdmin ? 5000 : 25,
+          credits: 0,
+          usedCredits: 0,
           planName: isDefaultAdmin ? 'Master Administrator' : 'Standard Verified Plan',
           planExpiry: isDefaultAdmin ? '2030-12-31' : '2027-12-31',
-          totalScans: isDefaultAdmin ? 142 : 0,
+          totalScans: 0,
           createdAt: new Date().toISOString().split('T')[0],
           emailVerified: true,
           photoURL: result.user.photoURL || null,
@@ -1138,7 +1349,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
         setCurrentUser(newUser);
         setUsers(prev => [newUser, ...prev]);
-        safeSetDoc(doc(db, 'users', newUser.id), newUser);
+        await setDoc(doc(db, 'users', newUser.id), newUser);
         if (isDefaultAdmin) {
           setActivePanel('admin');
         }
@@ -1214,62 +1425,81 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Give credits to a user (Admin feature - mapped directly to Cloud Firestore)
-  const giveCredits = (userId: string, amount: number, note: string = 'Admin Credit Grant') => {
+  const giveCredits = async (userId: string, amount: number, note: string = 'Admin Credit Grant'): Promise<boolean> => {
     if (!isAdminEmail(currentUser.email)) {
       setNotification({ message: 'Unauthorized: Only administrators can allocate credits.', type: 'error' });
       return false;
     }
+    const targetUser = users.find(u => u.id === userId);
+    if (!targetUser) {
+      setNotification({ message: 'The selected client could not be found. Refresh the user list and try again.', type: 'error' });
+      return false;
+    }
+    if (isAdminEmail(targetUser.email) || targetUser.role === 'admin') {
+      setNotification({ message: 'Credits can only be allocated to client accounts.', type: 'error' });
+      return false;
+    }
     if (amount <= 0 && !confirm('Are you sure you want to deduct credits?')) return false;
 
-    const targetUser = users.find(u => u.id === userId) || currentUser;
-    const newBal = Math.max(0, targetUser.credits + amount);
+    const userRef = doc(db, 'users', userId);
+    const transactionRef = doc(collection(db, 'transactions'));
+    const timestamp = Date.now();
+    const transactionDate = formatPakistanDateTime(timestamp);
 
-    setUsers(prevUsers =>
-      prevUsers.map(u => {
-        if (u.id === userId) {
-          return { ...u, credits: newBal };
+    try {
+      const result = await runTransaction(db, async transaction => {
+        const userSnapshot = await transaction.get(userRef);
+        if (!userSnapshot.exists()) {
+          throw new Error('The selected client no longer exists in Firestore. Refresh the user list and try again.');
         }
-        return u;
-      })
-    );
 
-    if (currentUser.id === userId) {
-      setCurrentUser(prev => ({ ...prev, credits: newBal }));
+        const userData = userSnapshot.data();
+        if (isAdminEmail(userData.email) || userData.role === 'admin') {
+          throw new Error('Credits can only be allocated to client accounts.');
+        }
+
+        const currentBalance = typeof userData.credits === 'number' ? userData.credits : 0;
+        const balanceAfter = Math.max(0, currentBalance + amount);
+        const appliedAmount = balanceAfter - currentBalance;
+        const userName = userData.name || targetUser.name;
+        const creditTransaction: CreditTransaction = {
+          id: transactionRef.id,
+          userId,
+          userName,
+          amount: appliedAmount,
+          balanceAfter,
+          type: 'admin_grant',
+          note,
+          date: transactionDate,
+          timestamp,
+        };
+
+        transaction.set(userRef, { credits: balanceAfter }, { merge: true });
+        transaction.set(transactionRef, creditTransaction);
+        return { balanceAfter, appliedAmount, userName, creditTransaction };
+      });
+
+      setUsers(prevUsers => prevUsers.map(user =>
+        user.id === userId ? { ...user, credits: result.balanceAfter } : user
+      ));
+      if (currentUser.id === userId) {
+        setCurrentUser(prev => ({ ...prev, credits: result.balanceAfter }));
+      }
+      setTransactions(prev => [result.creditTransaction, ...prev.filter(item => item.id !== transactionRef.id)]);
+
+      setNotification({
+        message: `Successfully allocated ${result.appliedAmount > 0 ? '+' : ''}${result.appliedAmount} credits to ${result.userName}.`,
+        type: 'success',
+      });
+      return true;
+    } catch (error) {
+      console.error('Credit allocation failed:', error);
+      setNotification({
+        message: error instanceof Error ? error.message : 'Could not save the credit allocation. No balance change was made.',
+        type: 'error',
+      });
+      return false;
     }
-
-    const newTxn: CreditTransaction = {
-      id: `tx-${Date.now()}`,
-      userId,
-      userName: targetUser.name,
-      amount,
-      balanceAfter: newBal,
-      type: 'admin_grant',
-      note,
-      date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      timestamp: Date.now(),
-    };
-
-    setTransactions(prev => [newTxn, ...prev]);
-
-    // MAP TO FIRESTORE: Update user document in Firestore users collection
-    safeSetDoc(doc(db, 'users', userId), {
-      credits: newBal,
-      name: targetUser.name,
-      email: targetUser.email,
-    }, { merge: true }).catch(err => {
-      console.warn('Notice while updating user credits in Firestore:', err);
-    });
-
-    // MAP TO FIRESTORE: Save transaction record
-    safeSetDoc(doc(db, 'transactions', newTxn.id), newTxn).catch(err => {
-      console.warn('Notice while writing transaction to Firestore:', err);
-    });
-
-    setNotification({
-      message: `Successfully allocated ${amount > 0 ? `+${amount}` : amount} credits to ${targetUser.name} (synced to Firestore)!`,
-      type: 'success',
-    });
-    return true;
   };
 
   // Add user as Admin (Create user profile with initial credits directly in Cloud Firestore)
@@ -1289,6 +1519,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setNotification({ message: 'Please provide a valid email address.', type: 'error' });
       return false;
     }
+    if (isAdminEmail(cleanEmail)) {
+      setNotification({ message: 'The administrator account cannot be created as a client account.', type: 'error' });
+      return false;
+    }
     if (users.some(u => u.email.toLowerCase() === cleanEmail)) {
       setNotification({ message: `A user with email ${cleanEmail} already exists.`, type: 'error' });
       return false;
@@ -1301,6 +1535,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       email: cleanEmail,
       role: 'client',
       credits: Math.max(0, userData.credits),
+      usedCredits: 0,
       planName: userData.planName || 'Standard Verified Plan',
       planExpiry: userData.planExpiry || '2027-12-31',
       totalScans: 0,
@@ -1324,7 +1559,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           balanceAfter: newUser.credits,
           type: 'admin_grant',
           note: `Admin provisioned user account with ${newUser.credits} credits`,
-          date: new Date().toISOString().replace('T', ' ').substring(0, 16),
+          date: formatPakistanDateTime(),
           timestamp: Date.now(),
         };
         setTransactions(prev => [welcomeTx, ...prev]);
@@ -1353,31 +1588,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return false;
     }
     const targetUser = users.find(u => u.id === userId);
+    const isTargetAdmin = isAdminEmail(targetUser?.email) || (userId === currentUser.id && isAdminEmail(currentUser.email));
+    const safeUpdates = isTargetAdmin ? { ...updates, credits: 0, usedCredits: 0, totalScans: 0 } : updates;
     const prevCredits = targetUser ? targetUser.credits : 0;
 
     setUsers(prev =>
-      prev.map(u => (u.id === userId ? { ...u, ...updates } : u))
+      prev.map(u => (u.id === userId ? { ...u, ...safeUpdates } : u))
     );
 
     if (currentUser.id === userId) {
-      setCurrentUser(prev => ({ ...prev, ...updates }));
+      setCurrentUser(prev => ({ ...prev, ...safeUpdates }));
     }
 
     // MAP TO FIRESTORE: Update document in Firestore
     try {
-      await safeSetDoc(doc(db, 'users', userId), updates, { merge: true });
+      await safeSetDoc(doc(db, 'users', userId), safeUpdates, { merge: true });
 
-      if (updates.credits !== undefined && updates.credits !== prevCredits) {
-        const diff = updates.credits - prevCredits;
+      if (!isTargetAdmin && safeUpdates.credits !== undefined && safeUpdates.credits !== prevCredits) {
+        const diff = safeUpdates.credits - prevCredits;
         const auditTxn: CreditTransaction = {
           id: `tx-${Date.now()}`,
           userId,
-          userName: updates.name || targetUser?.name || 'User',
+          userName: safeUpdates.name || targetUser?.name || 'User',
           amount: diff,
-          balanceAfter: updates.credits,
+          balanceAfter: safeUpdates.credits,
           type: 'admin_grant',
-          note: `Admin modified credit balance: ${prevCredits} -> ${updates.credits}`,
-          date: new Date().toISOString().replace('T', ' ').substring(0, 16),
+          note: `Admin modified credit balance: ${prevCredits} -> ${safeUpdates.credits}`,
+          date: formatPakistanDateTime(),
           timestamp: Date.now(),
         };
         setTransactions(prev => [auditTxn, ...prev]);
@@ -1385,7 +1622,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       setNotification({
-        message: `User record for ${updates.name || targetUser?.name || 'user'} updated in Cloud Firestore!`,
+        message: `User record for ${safeUpdates.name || targetUser?.name || 'user'} updated in Cloud Firestore!`,
         type: 'success',
       });
       return true;
@@ -1397,76 +1634,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       return true;
     }
-  };
-
-  // Redeem code (Client feature)
-  const redeemCode = (codeStr: string) => {
-    const cleanCode = codeStr.trim().toUpperCase();
-    const foundCode = activationCodes.find(
-      c => c.code.toUpperCase() === cleanCode && c.isActive
-    );
-
-    if (!foundCode) {
-      return { success: false, message: 'Invalid or inactive activation code.' };
-    }
-
-    if (foundCode.usedCount >= foundCode.maxUses) {
-      return { success: false, message: 'This code has reached its maximum redemption limit.' };
-    }
-
-    // Award credits to current user
-    const creditAmount = foundCode.credits;
-    const newBal = currentUser.credits + creditAmount;
-
-    setCurrentUser(prev => ({
-      ...prev,
-      credits: newBal,
-      planName: prev.planName === 'No active plan assigned.' ? 'Active Credit Plan' : prev.planName,
-    }));
-
-    setUsers(prevUsers =>
-      prevUsers.map(u => (u.id === currentUser.id ? { ...u, credits: newBal } : u))
-    );
-
-    // MAP TO FIRESTORE: Update user balance in Firestore
-    safeSetDoc(doc(db, 'users', currentUser.id), { credits: newBal }, { merge: true }).catch(() => {});
-
-    // Update activation code usage
-    const updatedUsedCount = foundCode.usedCount + 1;
-    const stillActive = updatedUsedCount < foundCode.maxUses;
-    setActivationCodes(prev =>
-      prev.map(c => (c.id === foundCode.id ? { ...c, usedCount: updatedUsedCount, isActive: stillActive } : c))
-    );
-
-    // MAP TO FIRESTORE: Update activation code in Firestore
-    safeSetDoc(doc(db, 'activation_codes', foundCode.id), {
-      usedCount: updatedUsedCount,
-      isActive: stillActive,
-    }, { merge: true }).catch(() => {});
-
-    // Log transaction
-    const newTxn: CreditTransaction = {
-      id: `tx-${Date.now()}`,
-      userId: currentUser.id,
-      userName: currentUser.name,
-      amount: creditAmount,
-      balanceAfter: newBal,
-      type: 'redeem_code',
-      note: `Redeemed code: ${foundCode.code}`,
-      date: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      timestamp: Date.now(),
-    };
-    setTransactions(prev => [newTxn, ...prev]);
-
-    // MAP TO FIRESTORE: Save transaction
-    safeSetDoc(doc(db, 'transactions', newTxn.id), newTxn).catch(() => {});
-
-    setNotification({
-      message: `Code redeemed successfully! +${creditAmount} credits added to your account.`,
-      type: 'success',
-    });
-
-    return { success: true, message: `Redeemed +${creditAmount} credits!`, creditsAdded: creditAmount };
   };
 
   // Generate activation code (Admin feature - mapped directly to Cloud Firestore)
@@ -1544,6 +1711,173 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
+  const createPurchaseKey = async (key: string, credits: number, note?: string): Promise<PurchaseKey | null> => {
+    if (!isAdminEmail(currentUser.email)) {
+      setNotification({ message: 'Unauthorized: Only administrators can create purchase keys.', type: 'error' });
+      return null;
+    }
+
+    const normalizedKey = key.trim().toUpperCase();
+    if (!normalizedKey || !Number.isSafeInteger(credits) || credits < 1) {
+      setNotification({ message: 'Enter a valid key and a positive whole-number credit amount.', type: 'error' });
+      return null;
+    }
+
+    const purchaseKey: PurchaseKey = {
+      id: normalizedKey,
+      key: normalizedKey,
+      credits,
+      maxUses: 1,
+      usedCount: 0,
+      isActive: true,
+      note: note?.trim() || '',
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser.email,
+    };
+
+    try {
+      const keyRef = doc(db, 'purchase_keys', purchaseKey.id);
+      await runTransaction(db, async transaction => {
+        const existingKey = await transaction.get(keyRef);
+        if (existingKey.exists()) throw new Error('That key already exists. Generate it again.');
+        transaction.set(keyRef, purchaseKey);
+      });
+      setPurchaseKeys(previous => [purchaseKey, ...previous.filter(existing => existing.id !== purchaseKey.id)]);
+      setNotification({ message: `Purchase key created for ${credits} credits.`, type: 'success' });
+      return purchaseKey;
+    } catch (error) {
+      console.error('Purchase key creation failed:', error);
+      setNotification({ message: 'Could not save the purchase key to Firestore.', type: 'error' });
+      return null;
+    }
+  };
+
+  const deletePurchaseKey = async (keyId: string): Promise<boolean> => {
+    if (!isAdminEmail(currentUser.email)) {
+      setNotification({ message: 'Unauthorized: Only administrators can delete purchase keys.', type: 'error' });
+      return false;
+    }
+
+    try {
+      await deleteDoc(doc(db, 'purchase_keys', keyId));
+      setPurchaseKeys(previous => previous.filter(key => key.id !== keyId));
+      setNotification({ message: 'Purchase key deleted.', type: 'success' });
+      return true;
+    } catch (error) {
+      console.error('Purchase key deletion failed:', error);
+      setNotification({ message: 'Could not delete the purchase key from Firestore.', type: 'error' });
+      return false;
+    }
+  };
+
+  const redeemPurchaseKey = async (key: string): Promise<boolean> => {
+    if (!firebaseUser) {
+      setNotification({ message: 'Sign in before redeeming a purchase key.', type: 'error' });
+      return false;
+    }
+
+    const normalizedKey = key.trim().toUpperCase();
+    if (!normalizedKey) {
+      setNotification({ message: 'Enter a purchase key.', type: 'error' });
+      return false;
+    }
+
+    const keyRef = doc(db, 'purchase_keys', normalizedKey);
+    const userRef = doc(db, 'users', firebaseUser.uid);
+    const transactionRef = doc(collection(db, 'transactions'));
+    const now = Date.now();
+
+    try {
+      const result = await runTransaction(db, async transaction => {
+        const keySnapshot = await transaction.get(keyRef);
+        const userSnapshot = await transaction.get(userRef);
+        if (!keySnapshot.exists()) throw new Error('Purchase key not found. Check the key and try again.');
+        if (!userSnapshot.exists()) throw new Error('Your account profile could not be found. Please sign in again.');
+
+        const keyData = keySnapshot.data();
+        if (keyData.key !== normalizedKey || keyData.isActive !== true || keyData.usedCount >= keyData.maxUses) {
+          throw new Error('This purchase key is invalid, inactive, or has already been redeemed.');
+        }
+        if (!Number.isSafeInteger(keyData.credits) || keyData.credits < 1) {
+          throw new Error('This purchase key has an invalid credit value. Contact support.');
+        }
+
+        const userData = userSnapshot.data();
+        const currentCredits = typeof userData.credits === 'number' ? userData.credits : 0;
+        const balanceAfter = currentCredits + keyData.credits;
+        const baseExpiry = Math.max(now, typeof userData.planExpiresAt === 'number' ? userData.planExpiresAt : 0);
+        const expiresAt = addOneCalendarMonth(new Date(baseExpiry));
+        const expiresAtTimestamp = expiresAt.getTime();
+        const date = formatPakistanDateTime(now);
+
+        transaction.update(keyRef, {
+          usedCount: keyData.usedCount + 1,
+          isActive: false,
+          redeemedByUserId: firebaseUser.uid,
+          redeemedByEmail: firebaseUser.email || currentUser.email,
+          redeemedAt: new Date(now).toISOString(),
+        });
+        transaction.set(userRef, {
+          credits: balanceAfter,
+          planExpiresAt: expiresAtTimestamp,
+          planExpiry: expiresAt.toISOString().slice(0, 10),
+          lastRedeemedPurchaseKeyId: normalizedKey,
+        }, { merge: true });
+        transaction.set(transactionRef, {
+          id: transactionRef.id,
+          userId: firebaseUser.uid,
+          userName: currentUser.name,
+          amount: keyData.credits,
+          balanceAfter,
+          type: 'redeem_code',
+          note: `Redeemed purchase key: ${normalizedKey}`,
+          date,
+          timestamp: now,
+        });
+
+        return { balanceAfter, expiresAtTimestamp, expiresOn: expiresAt.toISOString().slice(0, 10), amount: keyData.credits };
+      });
+
+      setCurrentUser(previous => ({
+        ...previous,
+        credits: result.balanceAfter,
+        planExpiresAt: result.expiresAtTimestamp,
+        planExpiry: result.expiresOn,
+      }));
+      setUsers(previous => previous.map(user => user.id === firebaseUser.uid ? {
+        ...user,
+        credits: result.balanceAfter,
+        planExpiresAt: result.expiresAtTimestamp,
+        planExpiry: result.expiresOn,
+      } : user));
+      setTransactions(previous => [{
+        id: transactionRef.id,
+        userId: firebaseUser.uid,
+        userName: currentUser.name,
+        amount: result.amount,
+        balanceAfter: result.balanceAfter,
+        type: 'redeem_code',
+        note: `Redeemed purchase key: ${normalizedKey}`,
+        date: formatPakistanDateTime(now),
+        timestamp: now,
+      }, ...previous.filter(item => item.id !== transactionRef.id)]);
+      setNotification({ message: `${result.amount} credits added. Your plan expires on ${result.expiresOn}.`, type: 'success' });
+      return true;
+    } catch (error) {
+      const firebaseError = error as { code?: string; message?: string };
+      const errorCode = firebaseError.code || 'unknown';
+      const errorMessage = firebaseError.message || 'Could not redeem this purchase key.';
+      console.error('Purchase key redemption failed:', { code: errorCode, message: errorMessage, error });
+      setNotification({
+        message: /quota exceeded/i.test(errorMessage) || errorCode === 'resource-exhausted'
+          ? `Firestore quota exceeded (${errorCode}). Check Firebase Usage and billing, then retry when quota is available.`
+          : `${errorMessage} (${errorCode})`,
+        type: 'error',
+      });
+      return false;
+    }
+  };
+
   const deleteUser = async (userId: string) => {
     if (!isAdminEmail(currentUser.email)) {
       setNotification({ message: 'Unauthorized: Only administrators can manage user accounts.', type: 'error' });
@@ -1551,7 +1885,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     const target = users.find(u => u.id === userId);
     if (!target) return;
-    if (target.email.toLowerCase() === 'admin@turnitscope.com' || target.id === currentUser.id) {
+    if (target.email.toLowerCase() === ADMIN_EMAIL || target.id === currentUser.id) {
       setNotification({ message: 'Primary administrator account cannot be deleted.', type: 'error' });
       return;
     }
@@ -1585,6 +1919,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     fileData?: string;
     storagePath?: string;
     fileMimeType?: string;
+    sourceFileData?: string;
+    sourceFileMimeType?: string;
+    sourceFileSize?: number;
     htmlContent?: string;
     htmlPages?: string[];
     pageCount?: number;
@@ -1597,42 +1934,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const cost = creditCosts[options.mode];
 
+    if (typeof currentUser.planExpiresAt === 'number' && Date.now() >= currentUser.planExpiresAt) {
+      return {
+        success: false,
+        error: 'Your plan has expired. Redeem a new purchase key to continue scanning.',
+      };
+    }
+
     if (currentUser.credits < cost) {
       return {
         success: false,
-        error: `Insufficient credits. This check requires ${cost} credits, but you have ${currentUser.credits}. Redeem an activation code or contact your Admin to get credits.`,
+        error: `Insufficient credits. This check requires ${cost} credits, but you have ${currentUser.credits}. Please contact your admin for more credits.`,
       };
     }
 
     setIsScanning(true);
-    setScanProgress({ step: 'Uploading and parsing document structure...', percent: 15 });
+    setScanProgress({ step: 'Preparing document analysis...', percent: 15 });
+    let uploadedReportId: string | undefined;
 
     try {
+      if (!auth.currentUser || auth.currentUser.uid !== firebaseUser?.uid) {
+        return {
+          success: false,
+          error: 'Sign in with Firebase to save scans and report metadata to your account.',
+        };
+      }
+
       setScanProgress({ step: 'Extracting text and preparing the document layout...', percent: 45 });
       setScanProgress({ step: 'Rendering the final report from the uploaded document...', percent: 75 });
-
-      const newBal = currentUser.credits - cost;
-      setCurrentUser(prev => ({
-        ...prev,
-        credits: newBal,
-        totalScans: prev.totalScans + 1,
-      }));
-
-      setUsers(prev =>
-        prev.map(u =>
-          u.id === currentUser.id
-            ? { ...u, credits: newBal, totalScans: u.totalScans + 1 }
-            : u
-        )
-      );
-
-      if (firebaseUser) {
-        safeSetDoc(
-          doc(db, 'users', firebaseUser.uid),
-          { credits: newBal, totalScans: currentUser.totalScans + 1 },
-          { merge: true }
-        );
-      }
 
       const modeNameMap: Record<ScanMode, 'AI Detection' | 'Plagiarism Check' | 'Both'> = {
         ai: 'AI Detection',
@@ -1671,6 +2000,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       }
 
+      const reportId = `rep-${Date.now()}`;
+      uploadedReportId = reportId;
+      const expiresAt = Date.now() + ONE_DAY_MS;
+      const storedFileSize = options.sourceFileSize ?? 0;
+
       const rawWords = sampleText.trim().split(/\s+/).filter(Boolean).length;
       const calculatedWordCount = Math.max(720, rawWords);
       const calculatedCharCount = sampleText.length > 500 ? sampleText.length : calculatedWordCount * 6;
@@ -1704,12 +2038,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const now = Date.now();
       const newReport: ScanReport = {
-        id: `rep-${Date.now()}`,
+        id: reportId,
         userId: currentUser.id,
-        expiresAt: now + ONE_DAY_MS,
+        expiresAt,
         title: options.fileName,
         fileName: options.fileName,
-        fileSize: options.fileData ? `${Math.max(0.1, Math.round((options.fileData.length * 0.75) / 1024 / 10.24) / 100)} MB` : '1.8 MB',
+        fileSize: storedFileSize ? `${Math.max(0.01, storedFileSize / (1024 * 1024)).toFixed(2)} MB` : '1.8 MB',
         author: authorFullName || 'Author',
         type: modeNameMap[options.mode] || 'Both',
         status: 'Completed',
@@ -1725,13 +2059,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sources: sourcesList,
         contentSample: sampleText,
         snippets: generatedSnippets,
-        institution: options.institution || currentUser.institution || 'Allama Iqbal Open University',
+        institution: options.institution || 'Allama Iqbal Open University',
         submissionDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }),
         downloadDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }),
         pageCount: calculatedPageCount,
-        fileData: options.fileData,
-        storagePath: options.storagePath,
-        fileMimeType: options.fileMimeType,
+        fileData: options.fileMimeType === 'application/pdf' ? options.fileData : undefined,
         text: sampleText,
         htmlContent: options.htmlContent,
         htmlPages: options.htmlPages,
@@ -1750,28 +2082,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         integrityFlagsCount: 0,
       };
 
-      setReports(prev => {
-        const merged = [newReport, ...prev.filter(r => r.id !== newReport.id)];
-        return pruneExpiredReports(merged, currentUser.id);
-      });
-
-      if (firebaseUser) {
-        safeSetDoc(doc(db, 'reports', newReport.id), {
-          ...newReport,
-          userId: firebaseUser.uid,
-          expiresAt: newReport.expiresAt,
+      if (newReport.fileData && newReport.expiresAt) {
+        await saveReportFile(newReport.id, newReport.fileData, newReport.expiresAt).catch(error => {
+          console.warn('Could not cache the original document in IndexedDB:', error);
         });
       }
 
+      const {
+        fileData: _fileData,
+        text: _text,
+        htmlContent: _htmlContent,
+        htmlPages: _htmlPages,
+        storagePath: _storagePath,
+        sourceStoragePath: _sourceStoragePath,
+        fileMimeType: _fileMimeType,
+        fileMetadataId: _fileMetadataId,
+        ...persistedReport
+      } = newReport;
+      await setDoc(doc(db, 'reports', newReport.id), {
+        ...persistedReport,
+        userId: firebaseUser.uid,
+        expiresAt: newReport.expiresAt,
+      });
+
+      const transactionId = `tx-${Date.now()}`;
+      const transactionDate = formatPakistanDateTime();
+      const balanceResult = await runTransaction(db, async transaction => {
+        const userRef = doc(db, 'users', firebaseUser.uid);
+        const userSnapshot = await transaction.get(userRef);
+        if (!userSnapshot.exists()) {
+          throw new Error('Your Firebase profile is missing. Please sign out and sign in again.');
+        }
+        const userData = userSnapshot.data();
+        if (typeof userData.planExpiresAt === 'number' && Date.now() >= userData.planExpiresAt) {
+          throw new Error('Your plan has expired. Redeem a new purchase key to continue scanning.');
+        }
+        const availableCredits = typeof userData.credits === 'number' ? userData.credits : 0;
+        if (availableCredits < cost) {
+          throw new Error(`Insufficient credits. This check requires ${cost} credits, but you have ${availableCredits}.`);
+        }
+        const balanceAfter = availableCredits - cost;
+        const usedCredits = (typeof userData.usedCredits === 'number' ? userData.usedCredits : 0) + cost;
+        const totalScans = (typeof userData.totalScans === 'number' ? userData.totalScans : 0) + 1;
+        transaction.set(userRef, { credits: balanceAfter, usedCredits, totalScans }, { merge: true });
+        transaction.set(doc(db, 'transactions', transactionId), {
+          id: transactionId,
+          userId: firebaseUser.uid,
+          userName: currentUser.name,
+          amount: -cost,
+          balanceAfter,
+          type: 'scan_deduction',
+          note: `Scanned document: ${options.fileName} (${modeNameMap[options.mode]})`,
+          date: transactionDate,
+          timestamp: Date.now(),
+        });
+        return { balanceAfter, usedCredits, totalScans };
+      });
+
+      const newBal = balanceResult.balanceAfter;
+      setCurrentUser(prev => ({
+        ...prev,
+        credits: balanceResult.balanceAfter,
+        usedCredits: balanceResult.usedCredits,
+        totalScans: balanceResult.totalScans,
+      }));
+      setUsers(prev => prev.map(user => user.id === firebaseUser.uid ? {
+        ...user,
+        credits: balanceResult.balanceAfter,
+        usedCredits: balanceResult.usedCredits,
+        totalScans: balanceResult.totalScans,
+      } : user));
+      setReports(prev => pruneExpiredReports([newReport, ...prev.filter(report => report.id !== newReport.id)], currentUser.id));
+
       const scanTxn: CreditTransaction = {
-        id: `tx-${Date.now()}`,
-        userId: currentUser.id,
+        id: transactionId,
+        userId: firebaseUser.uid,
         userName: currentUser.name,
         amount: -cost,
         balanceAfter: newBal,
         type: 'scan_deduction',
         note: `Scanned document: ${options.fileName} (${modeNameMap[options.mode]})`,
-        date: new Date().toISOString().replace('T', ' ').substring(0, 16),
+        date: transactionDate,
         timestamp: Date.now(),
       };
       setTransactions(prev => [scanTxn, ...prev]);
@@ -1790,18 +2181,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: true, report: newReport };
     } catch (error) {
       console.error('Scan failed:', error);
+      const cleanup: Promise<unknown>[] = [];
+      if (uploadedReportId) cleanup.push(deleteDoc(doc(db, 'reports', uploadedReportId)));
+      await Promise.allSettled(cleanup);
       setIsScanning(false);
       setScanProgress(null);
       setNotification({
-        message: 'Scan failed while processing the document. Please try again.',
+        message: error instanceof Error ? error.message : 'Scan failed while processing the document. Please try again.',
         type: 'error',
       });
-      return { success: false, error: 'Scan failed while processing the document.' };
+      return { success: false, error: error instanceof Error ? error.message : 'Scan failed while processing the document.' };
     }
   };
 
-  const deleteReport = (reportId: string) => {
+  const deleteReport = async (reportId: string) => {
+    const reportToDelete = reports.find(report => report.id === reportId);
     setReports(prev => prev.filter(r => r.id !== reportId));
+    await deleteReportFile(reportId).catch(error => {
+      console.warn('Could not remove the original document from IndexedDB:', error);
+    });
     if (currentUser?.id) {
       const storageKey = getReportsStorageKey(currentUser.id);
       const saved = localStorage.getItem(storageKey);
@@ -1812,23 +2210,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } catch {}
       }
     }
+
+    if (firebaseUser) {
+      await Promise.allSettled([
+        deleteDoc(doc(db, 'reports', reportId)),
+        deleteDoc(doc(db, 'files', reportToDelete?.fileMetadataId || reportId)),
+      ]);
+    }
     setNotification({ message: 'Report removed', type: 'info' });
   };
 
   const updateCurrentUser = async (updates: Partial<User>) => {
-    setCurrentUser(prev => {
-      const updated = { ...prev, ...updates };
-      if (firebaseUser) {
-        safeSetDoc(doc(db, 'users', firebaseUser.uid), updated, { merge: true });
-      }
-      return updated;
-    });
-    setUsers(prev =>
-      prev.map(u => (u.id === currentUser.id ? { ...u, ...updates } : u))
-    );
-    if (updates.name || updates.photoURL !== undefined || updates.email) {
-      await updateFirebaseUserProfile(updates.name, updates.photoURL, updates.email);
+    const targetUserId = firebaseUser?.uid || currentUser.id;
+    const authenticatedUser = auth.currentUser;
+    if (!authenticatedUser || authenticatedUser.uid !== targetUserId) {
+      throw new Error(
+        'A valid Firebase Auth session is required to save profile changes. Sign out and sign in again with Firebase.'
+      );
     }
+
+    const profileUpdates = {
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        setDoc(doc(db, 'users', authenticatedUser.uid), profileUpdates, { merge: true }),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error('The server did not confirm the profile update. Check your connection and try again.')),
+            10_000
+          );
+        }),
+      ]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+
+    if (updates.name) {
+      void updateFirebaseUserProfile(updates.name);
+    }
+
+    setCurrentUser(prev => ({ ...prev, ...profileUpdates }));
+    setUsers(prev =>
+      prev.map(u => (u.id === currentUser.id ? { ...u, ...profileUpdates } : u))
+    );
     setNotification({ message: 'Profile updated successfully!', type: 'success' });
   };
 
@@ -1853,6 +2281,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         users,
         reports,
         activationCodes,
+        purchaseKeys,
         transactions,
         activePanel,
         activeTab,
@@ -1876,10 +2305,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setNotification,
         giveCredits,
         deleteUser,
-        redeemCode,
         generateCode,
         deleteCode,
         toggleCodeActivation,
+        createPurchaseKey,
+        deletePurchaseKey,
+        redeemPurchaseKey,
         runScan,
         deleteReport,
         updateCurrentUser,

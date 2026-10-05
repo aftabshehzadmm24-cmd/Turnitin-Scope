@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useApp } from '../context/AppContext';
+import { isAdminEmail, useApp } from '../context/AppContext';
 import {
   Bell,
   Shield,
@@ -77,7 +77,12 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
     if (timerRef.current) clearTimeout(timerRef.current);
   };
 
-  const recentAlerts = isDismissedManual ? [] : transactions.slice(0, 4);
+  const recentAlerts = isDismissedManual
+    ? []
+    : transactions
+        .filter(tx => tx.note !== 'Redeemed code: TC-WELCOME10')
+        .filter(tx => tx.note !== 'Initial verified user balance')
+        .slice(0, 4);
 
   return (
     <header className="border-b border-slate-200/80 bg-white/95 backdrop-blur-md px-3 sm:px-6 py-3 sm:py-0 h-auto sm:h-16 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sticky top-0 z-20">
@@ -202,11 +207,10 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
                 <button
                   onClick={() => {
                     setShowNotifications(false);
-                    setActiveTab('redeem');
                   }}
                   className="text-indigo-600 hover:text-indigo-800 py-1"
                 >
-                  Redeem Promo Code →
+                  Recent activity →
                 </button>
               </div>
             </div>
@@ -219,7 +223,7 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
             onClick={() => setIsProfileModalOpen(true)}
             className="flex items-center gap-2 px-2 py-1 text-xs font-semibold text-slate-800 hover:bg-white rounded-lg transition cursor-pointer group min-w-0"
             id="header-user-badge"
-            title="Click to view & edit your academic profile"
+            title="Click to view & edit your profile"
           >
             {currentUser.photoURL ? (
               <img
@@ -250,7 +254,7 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
         </div>
 
         {/* Switch to Admin Mode Button */}
-        {currentUser.role === 'admin' && currentUser.email?.toLowerCase() === 'admin@turnitscope.com' && (
+        {currentUser.role === 'admin' && isAdminEmail(currentUser.email) && (
           <button
             onClick={() => setActivePanel('admin')}
             className="flex items-center gap-2 bg-gradient-to-r from-slate-900 to-indigo-950 hover:from-slate-800 hover:to-indigo-900 text-white text-[10px] sm:text-xs font-bold px-2.5 sm:px-3 py-2 rounded-xl shadow-sm transition group shrink-0"

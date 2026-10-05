@@ -1,9 +1,10 @@
 import type { User } from '../types';
+import { ADMIN_EMAIL } from './firebase';
 
 export const isAdminEmail = (email?: string | null): boolean => {
   if (!email) return false;
   const em = email.trim().toLowerCase();
-  return em === 'admin@turnitscope.com';
+  return em === ADMIN_EMAIL;
 };
 
 export type AuthProfileLike = {
@@ -30,10 +31,11 @@ export function buildUserFromAuthProfile(
       'Academic User',
     email,
     role: isAdmin ? 'admin' : 'client',
-    credits: isAdmin ? 5000 : 25,
+    credits: 0,
+    usedCredits: 0,
     planName: isAdmin ? 'Master Administrator' : 'Standard Verified Plan',
     planExpiry: isAdmin ? '2030-12-31' : '2027-12-31',
-    totalScans: isAdmin ? 142 : 0,
+    totalScans: 0,
     createdAt: new Date().toISOString().split('T')[0],
     emailVerified: !!authProfile.emailVerified,
     photoURL: authProfile.photoURL || null,

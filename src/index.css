@@ -53,3 +53,14 @@ body {
   background: #818cf8;
   background-clip: padding-box;
 }
+
+.hide-number-steppers {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.hide-number-steppers::-webkit-inner-spin-button,
+.hide-number-steppers::-webkit-outer-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}

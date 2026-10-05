@@ -27,7 +27,6 @@ import {
   getDocFromServer,
   Firestore,
 } from 'firebase/firestore';
-import { getStorage, ref, deleteObject, FirebaseStorage } from 'firebase/storage';
 import firebaseConfigJson from '../../firebase-applet-config.json';
 
 // Configure logging level to silent to suppress noisy internal transport retry warnings
@@ -70,8 +69,6 @@ function initFirestoreInstance(): Firestore {
 }
 
 export const db: Firestore = initFirestoreInstance();
-export const storage: FirebaseStorage = getStorage(app);
-
 // Validate Connection to Firestore per Firebase Skill guidelines
 export async function testConnection(): Promise<boolean> {
   try {
@@ -146,46 +143,6 @@ export function isUnauthorizedDomainError(error: any): boolean {
   const code = String(error?.code || '').toLowerCase();
   const message = String(error?.message || error || '').toLowerCase();
   return code === 'auth/unauthorized-domain' || message.includes('auth/unauthorized-domain') || message.includes('unauthorized domain');
-}
-
-export function createGoogleAuthFallbackUser(): FirebaseUser {
-  const uid = 'usr_google_local_turnitscope';
-  const email = 'academic.user@local.turnitscope';
-  const displayName = 'Academic Google User';
-
-  const fallbackUser = {
-    uid,
-    email,
-    displayName,
-    photoURL: null,
-    emailVerified: true,
-    isAnonymous: false,
-    metadata: {
-      creationTime: new Date().toISOString(),
-      lastSignInTime: new Date().toISOString(),
-    },
-    providerData: [
-      {
-        providerId: 'google.com',
-        uid,
-        displayName,
-        email,
-        phoneNumber: null,
-        photoURL: null,
-      },
-    ],
-    tenantId: null,
-    delete: async () => {},
-    getIdToken: async () => 'local_google_fallback_token',
-    getIdTokenResult: async () => ({} as any),
-    reload: async () => {},
-    toJSON: () => ({ uid, email, displayName }),
-    phoneNumber: null,
-    providerId: 'firebase',
-    refreshToken: 'local_google_fallback_refresh_token',
-  };
-
-  return fallbackUser as unknown as FirebaseUser;
 }
 
 /**
@@ -269,13 +226,7 @@ export async function signInWithGoogle(): Promise<{ user: FirebaseUser; isNewUse
     };
   } catch (error: any) {
     if (isUnauthorizedDomainError(error)) {
-      const fallbackUser = createGoogleAuthFallbackUser();
-      try {
-        localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(fallbackUser));
-      } catch (storageErr) {
-        console.warn('Could not persist local Google fallback session:', storageErr);
-      }
-      return { user: fallbackUser };
+      throw new Error('This app domain is not authorized for Google sign-in. Add it to Firebase Console > Authentication > Settings > Authorized domains.');
     }
     if (error?.code === 'auth/popup-blocked') {
       throw new Error('Sign-in popup was blocked by your browser. Please allow popups or open the app in a new tab.');
@@ -290,143 +241,16 @@ export async function signInWithGoogle(): Promise<{ user: FirebaseUser; isNewUse
   }
 }
 
-const LOCAL_ACCOUNTS_KEY = 'turnitscope_local_auth_accounts_v1';
-export const ACTIVE_SESSION_KEY = 'turnitscope_active_auth_session_v1';
-
-interface LocalAccount {
-  uid: string;
-  email: string;
-  name: string;
-  pass: string;
-  createdAt: string;
-}
-
-export const ADMIN_EMAIL = 'admin@turnitscope.com';
-export const ADMIN_PASSWORD = 'admin@turnitscopepass2026!';
-
-function getLocalAccounts(): Record<string, LocalAccount> {
-  try {
-    const raw = localStorage.getItem(LOCAL_ACCOUNTS_KEY);
-    const parsed: Record<string, LocalAccount> = raw ? JSON.parse(raw) : {};
-    if (!parsed[ADMIN_EMAIL.toLowerCase()]) {
-      parsed[ADMIN_EMAIL.toLowerCase()] = {
-        uid: 'usr-admin-turnitscope',
-        email: ADMIN_EMAIL,
-        name: 'TurnitScope Administrator',
-        pass: ADMIN_PASSWORD,
-        createdAt: '2026-01-01T00:00:00.000Z',
-      };
-      try {
-        localStorage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(parsed));
-      } catch {}
-    } else {
-      // Keep master admin password synchronized
-      parsed[ADMIN_EMAIL.toLowerCase()].pass = ADMIN_PASSWORD;
-      try {
-        localStorage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(parsed));
-      } catch {}
-    }
-    if (!parsed['kunalsukhani333@gmail.com']) {
-      parsed['kunalsukhani333@gmail.com'] = {
-        uid: '2duBKdy3WCcWjJ08JTQ6KIYpwIC2',
-        email: 'kunalsukhani333@gmail.com',
-        name: 'Kunal Maheshwari',
-        pass: 'UserPass2026!',
-        createdAt: '2026-09-15T00:00:00.000Z',
-      };
-      try {
-        localStorage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(parsed));
-      } catch {}
-    } else {
-      // Ensure UID matches Firestore document
-      parsed['kunalsukhani333@gmail.com'].uid = '2duBKdy3WCcWjJ08JTQ6KIYpwIC2';
-      parsed['kunalsukhani333@gmail.com'].pass = parsed['kunalsukhani333@gmail.com'].pass || 'UserPass2026!';
-    }
-    return parsed;
-  } catch {
-    return {
-      [ADMIN_EMAIL.toLowerCase()]: {
-        uid: 'usr-admin-turnitscope',
-        email: ADMIN_EMAIL,
-        name: 'TurnitScope Administrator',
-        pass: ADMIN_PASSWORD,
-        createdAt: '2026-01-01T00:00:00.000Z',
-      },
-      'kunalsukhani333@gmail.com': {
-        uid: '2duBKdy3WCcWjJ08JTQ6KIYpwIC2',
-        email: 'kunalsukhani333@gmail.com',
-        name: 'Kunal Maheshwari',
-        pass: 'UserPass2026!',
-        createdAt: '2026-09-15T00:00:00.000Z',
-      },
-    };
-  }
-}
-
-function saveLocalAccount(account: LocalAccount) {
-  try {
-    const accounts = getLocalAccounts();
-    accounts[account.email.toLowerCase()] = account;
-    localStorage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
-  } catch (err) {
-    console.warn('Could not persist local account:', err);
-  }
-}
-
-export function getActiveSessionUser(): FirebaseUser | null {
-  try {
-    const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-export function createSyntheticUser(email: string, name?: string, customUid?: string): FirebaseUser {
-  const cleanEmail = email.trim();
-  const displayName = (name && name.trim()) || cleanEmail.split('@')[0] || 'Academic User';
-  const uid = customUid || `usr_id_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now().toString(36)}`;
-
-  const syntheticUser = {
-    uid,
-    email: cleanEmail,
-    displayName,
-    photoURL: null,
-    emailVerified: true,
-    isAnonymous: false,
-    metadata: {
-      creationTime: new Date().toISOString(),
-      lastSignInTime: new Date().toISOString(),
-    },
-    providerData: [
-      {
-        providerId: 'password',
-        uid,
-        displayName,
-        email: cleanEmail,
-        phoneNumber: null,
-        photoURL: null,
-      },
-    ],
-    tenantId: null,
-    delete: async () => {},
-    getIdToken: async () => 'active_institutional_token',
-    getIdTokenResult: async () => ({} as any),
-    reload: async () => {},
-    toJSON: () => ({ uid, email: cleanEmail, displayName }),
-    phoneNumber: null,
-    providerId: 'firebase',
-    refreshToken: 'valid_refresh_token',
-  };
-
-  return syntheticUser as unknown as FirebaseUser;
-}
+export const ADMIN_EMAIL = 'aftabshehzadmm24@gmail.com';
 
 /**
  * Helper to map Firebase Auth error codes to helpful, user-friendly messages
  */
 function parseAuthError(error: any): Error {
   const code = error?.code || '';
+  if (code === 'auth/operation-not-allowed') {
+    return new Error('This sign-in provider is disabled. Enable it in Firebase Console > Authentication > Sign-in method.');
+  }
   if (code === 'auth/email-already-in-use') {
     return new Error('An account with this email already exists. Please switch to "Sign in" or use Google Sign-In.');
   }
@@ -445,134 +269,43 @@ function parseAuthError(error: any): Error {
   return error instanceof Error ? error : new Error(String(error?.message || error || 'Authentication failed.'));
 }
 
-/**
- * Register with Email and Password & automatically send verification email
- * Gracefully handles projects where Email/Password provider isn't enabled in Firebase Console.
- */
+/** Register a client account with Firebase Authentication. */
 export async function registerWithEmail(
   name: string,
   email: string,
   pass: string
 ): Promise<{ user: FirebaseUser }> {
   const cleanEmail = email.trim().toLowerCase();
-  if (cleanEmail === ADMIN_EMAIL.toLowerCase()) {
-    throw new Error('This administrative account is pre-configured. Please switch to "Sign In" with your administrator credentials.');
+  if (cleanEmail === ADMIN_EMAIL) {
+    throw new Error('This administrative account is pre-configured. Please sign in with the administrator account.');
   }
 
   try {
-    const cred = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
+    const credential = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
     if (name.trim()) {
-      await updateProfile(cred.user, { displayName: name.trim() });
+      await updateProfile(credential.user, { displayName: name.trim() });
     }
     try {
-      await sendEmailVerification(cred.user);
-    } catch (err) {
-      console.warn('Could not send initial email verification:', err);
+      await sendEmailVerification(credential.user);
+    } catch (error) {
+      console.warn('Could not send initial email verification:', error);
     }
-    return { user: cred.user };
-  } catch (error: any) {
-    // If Email/Password is not enabled in Firebase Console, fallback to verified institutional registry seamlessly
-    if (error?.code === 'auth/operation-not-allowed') {
-      const accounts = getLocalAccounts();
-      const existing = accounts[cleanEmail];
-      if (existing) {
-        throw new Error('An account with this email already exists. Please switch to "Sign in" or reset your password.');
-      }
-      const account: LocalAccount = {
-        uid: `usr_reg_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`,
-        email: cleanEmail,
-        name: name.trim() || cleanEmail.split('@')[0],
-        pass,
-        createdAt: new Date().toISOString(),
-      };
-      saveLocalAccount(account);
-      const synthetic = createSyntheticUser(cleanEmail, account.name, account.uid);
-      try {
-        localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(synthetic));
-      } catch (err) {
-        console.warn('Could not persist active session:', err);
-      }
-      return { user: synthetic };
-    }
+    return { user: credential.user };
+  } catch (error) {
     throw parseAuthError(error);
   }
 }
 
 /**
- * Sign in with Email and Password
- * Gracefully handles projects where Email/Password provider isn't enabled in Firebase Console.
+ * Sign in with Email and Password through Firebase Authentication.
  */
 export async function loginWithEmail(email: string, pass: string): Promise<{ user: FirebaseUser }> {
   const cleanEmail = email.trim().toLowerCase();
 
-  // Explicit administrator authentication check
-  if (cleanEmail === ADMIN_EMAIL.toLowerCase()) {
-    if (pass !== ADMIN_PASSWORD && pass !== 'AdminPass2026!') {
-      throw new Error('Incorrect administrator password. Please verify your credentials.');
-    }
-    // Attempt Firebase auth if configured, otherwise create verified admin session
-    try {
-      const cred = await signInWithEmailAndPassword(auth, cleanEmail, pass);
-      return { user: cred.user };
-    } catch {
-      const synthetic = createSyntheticUser(ADMIN_EMAIL, 'TurnitScope Administrator', 'usr-admin-turnitscope');
-      try {
-        localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(synthetic));
-      } catch (err) {
-        console.warn('Could not persist admin session:', err);
-      }
-      return { user: synthetic };
-    }
-  }
-
   try {
-    const cred = await signInWithEmailAndPassword(auth, cleanEmail, pass);
-    return { user: cred.user };
-  } catch (error: any) {
-    if (
-      error?.code === 'auth/operation-not-allowed' ||
-      error?.code === 'auth/user-not-found' ||
-      error?.code === 'auth/invalid-credential' ||
-      error?.code === 'auth/wrong-password'
-    ) {
-      const accounts = getLocalAccounts();
-      const existing = accounts[cleanEmail];
-      if (existing) {
-        if (existing.pass && pass && existing.pass !== pass) {
-          throw new Error('Incorrect password. Please verify your credentials or use password recovery.');
-        }
-        if (!existing.pass && pass) {
-          existing.pass = pass;
-          saveLocalAccount(existing);
-        }
-        const synthetic = createSyntheticUser(cleanEmail, existing.name, existing.uid);
-        try {
-          localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(synthetic));
-        } catch (err) {
-          console.warn('Could not persist session:', err);
-        }
-        return { user: synthetic };
-      }
-
-      // Auto-provision user account seamlessly if a password was provided
-      if (pass && pass.length >= 1) {
-        const autoAccount: LocalAccount = {
-          uid: `usr_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now().toString(36)}`,
-          email: cleanEmail,
-          name: cleanEmail.split('@')[0],
-          pass,
-          createdAt: new Date().toISOString(),
-        };
-        saveLocalAccount(autoAccount);
-        const synthetic = createSyntheticUser(cleanEmail, autoAccount.name, autoAccount.uid);
-        try {
-          localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(synthetic));
-        } catch (err) {
-          console.warn('Could not persist session:', err);
-        }
-        return { user: synthetic };
-      }
-    }
+    const credential = await signInWithEmailAndPassword(auth, cleanEmail, pass);
+    return { user: credential.user };
+  } catch (error) {
     throw parseAuthError(error);
   }
 }
@@ -626,49 +359,12 @@ export async function updateFirebaseUserProfile(
     }
   }
 
-  // Also update active session in localStorage if present
-  try {
-    const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (displayName !== undefined) parsed.displayName = displayName;
-      if (photoURL !== undefined) parsed.photoURL = photoURL;
-      if (email !== undefined) parsed.email = email;
-      localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(parsed));
-    }
-  } catch (err) {
-    console.warn('Could not update active session:', err);
-  }
-
-  // Also update local registered account record if present
-  try {
-    const rawAccounts = localStorage.getItem(LOCAL_ACCOUNTS_KEY);
-    if (rawAccounts) {
-      const accounts = JSON.parse(rawAccounts);
-      const currentEmail = (auth.currentUser?.email || email || '').toLowerCase();
-      for (const key of Object.keys(accounts)) {
-        if (accounts[key].email?.toLowerCase() === currentEmail) {
-          if (displayName) accounts[key].name = displayName;
-          if (email) accounts[key].email = email;
-          break;
-        }
-      }
-      localStorage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
-    }
-  } catch (err) {
-    console.warn('Could not update local account:', err);
-  }
 }
 
 /**
  * Log out
  */
 export async function logOut(): Promise<void> {
-  try {
-    localStorage.removeItem(ACTIVE_SESSION_KEY);
-  } catch (e) {
-    console.warn('Error clearing session:', e);
-  }
   await signOut(auth).catch(() => {});
 }
 

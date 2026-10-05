@@ -1,12 +1,12 @@
 {
-  "projectId": "turnitscope",
-  "appId": "1:539719516054:web:941c638051de6b85dae7b7",
-  "apiKey": "AIzaSyB3z5CtQ8GzPJpmAiNqDorteucuhSbschM",
-  "authDomain": "turnitscope.firebaseapp.com",
+  "projectId": "turnitin-scope",
+  "appId": "1:752975888877:web:c8a4b4c60eb058548be7e4",
+  "apiKey": "AIzaSyC5oAHUb83ibyxnhigzib_Ce7A_JqhiBa0",
+  "authDomain": "turnitin-scope.firebaseapp.com",
   "firestoreDatabaseId": "",
-  "storageBucket": "turnitscope.firebasestorage.app",
-  "messagingSenderId": "539719516054",
-  "measurementId": "G-CP9V87YYCR",
+  "storageBucket": "turnitin-scope.firebasestorage.app",
+  "messagingSenderId": "752975888877",
+  "measurementId": "G-NXXB4P771N",
   "oAuthClientId": "",
   "recaptchaSiteKey": ""
 }

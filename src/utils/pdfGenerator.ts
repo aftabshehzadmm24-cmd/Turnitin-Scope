@@ -2181,17 +2181,15 @@ export async function downloadReportPdf(
       : `${report.aiScore}% detected as AI`;
     doc.text(aiText, margin, y);
 
-    // Left: Subtext with tight vertical line spacing (fits in 3 lines)
+    // Left: Compact low-score notice, split into two balanced lines.
     y += 14;
     if (isBelowThreshold) {
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(7.2);
+      doc.setFont('helvetica', 'normal');
       doc.setTextColor(0, 0, 0);
-      const aiNotice = doc.splitTextToSize(
-        'AI detection includes the possibility of false positives. Although some text in this submission is likely AI generated, scores below the 20% threshold are not surfaced because they have a higher likelihood of false positives.',
-        235
-      );
-      doc.text(aiNotice, margin, y, { lineHeightFactor: 1.25 });
+      doc.setFontSize(7);
+      doc.text('AI detection can produce false positives. Scores below 20%', margin, y);
+      doc.setFontSize(6.5);
+      doc.text('are hidden because they are more likely to be false positives.', margin, y + 8.5);
     } else if (report.aiScore === 0) {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(7.2);
@@ -2238,26 +2236,48 @@ export async function downloadReportPdf(
     doc.setDrawColor(226, 232, 240);
     doc.line(margin, y, pageWidth - margin, y);
 
-    // 1-line gap between underline and Disclaimer heading, with font size increased by 2 (10.5pt)
+    if (report.aiScore >= 21 && report.aiScore <= 70) {
+      const aiGeneratedCount = report.snippets.filter(snippet => snippet.type === 'ai_generated').length;
+      y += 17;
+      doc.setFillColor(6, 182, 212);
+      doc.circle(margin + 6, y - 2, 6, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.2);
+      doc.setTextColor(0, 0, 0);
+      doc.text(`${aiGeneratedCount} AI-generated ${report.aiScore}%`, margin + 18, y);
+
+      y += 9;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.8);
+      doc.setTextColor(71, 85, 105);
+      doc.text('Likely generated or likely generated and revised by AI.', margin + 18, y);
+
+      y += 9;
+      doc.setDrawColor(226, 232, 240);
+      doc.line(margin, y, pageWidth - margin, y);
+    }
+
+    // 1-line gap between underline and regular-weight Disclaimer heading.
     y += 18;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
     doc.setTextColor(0, 0, 0);
     doc.text('Disclaimer', margin, y);
 
     // 0 space between Disclaimer heading and the sentence below
     y += 9;
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.2);
+    doc.setFontSize(5.6);
     doc.setTextColor(71, 85, 105);
-    const discLines = doc.splitTextToSize(
-      'Our AI writing assessment is designed to help educators identify text that might be prepared by a generative AI tool. Our AI writing assessment may not always be accurate (it may misidentify writing that is likely human generated as AI generated and likely AI generated as human generated) so it should not be used as the sole basis for adverse actions against a student. It takes further scrutiny and human judgment in conjunction with an organization\'s application of its specific academic policies to determine whether any academic misconduct has occurred.',
-      contentWidth
-    );
+    const discLines = [
+      'Our AI writing assessment is designed to help educators identify text that might be prepared by a generative AI tool. Our AI writing assessment may not always be accurate',
+      '(it may misidentify writing that is likely human generated as AI generated and likely AI generated as human generated) so it should not be used as the sole basis for adverse actions against a student.',
+      'It takes further scrutiny and human judgment in conjunction with an organization\'s application of its specific academic policies to determine whether any academic misconduct has occurred.',
+    ];
     doc.text(discLines, margin, y, { lineHeightFactor: 1.25 });
 
     // Underline after Disclaimer text with 1-line gap
-    const discHeight = (discLines.length * 7.2 * 1.25);
+    const discHeight = (discLines.length * 5.6 * 1.25);
     y += discHeight + 14;
     doc.setDrawColor(226, 232, 240);
     doc.line(margin, y, pageWidth - margin, y);

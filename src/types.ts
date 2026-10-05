@@ -3,21 +3,20 @@ export type ScanMode = 'ai' | 'plagiarism' | 'both';
 export interface User {
   id: string;
   name: string;
+  firstName?: string;
+  lastName?: string;
   email: string;
   role: 'client' | 'admin';
   credits: number;
+  usedCredits?: number;
   planName: string;
   planExpiry: string;
+  planExpiresAt?: number;
   totalScans: number;
   createdAt: string;
   emailVerified?: boolean;
   photoURL?: string | null;
   authProvider?: 'google' | 'password' | 'demo';
-  institution?: string;
-  department?: string;
-  academicTitle?: string;
-  phone?: string;
-  bio?: string;
 }
 
 export interface MatchedSource {
@@ -105,7 +104,9 @@ export interface ScanReport {
   manuscriptPages?: ManuscriptContentPage[];
   fileData?: string;
   storagePath?: string;
+  sourceStoragePath?: string;
   fileMimeType?: string;
+  fileMetadataId?: string;
   htmlContent?: string;
   htmlPages?: string[];
 }
@@ -120,6 +121,21 @@ export interface ActivationCode {
   createdAt: string;
   note?: string;
   createdBy?: string;
+}
+
+export interface PurchaseKey {
+  id: string;
+  key: string;
+  credits: number;
+  maxUses: number;
+  usedCount: number;
+  isActive: boolean;
+  note?: string;
+  createdAt: string;
+  createdBy: string;
+  redeemedByEmail?: string;
+  redeemedByUserId?: string;
+  redeemedAt?: string;
 }
 
 export interface CreditTransaction {

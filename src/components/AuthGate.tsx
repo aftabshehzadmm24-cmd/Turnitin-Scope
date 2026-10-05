@@ -10,23 +10,15 @@ import {
   Cpu,
   Lock,
   KeyRound,
-  Eye,
-  EyeOff,
-  UserCheck,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export const AuthGate: React.FC = () => {
-  const { signInWithGoogleAuth, signInWithEmailAuth } = useApp();
+  const { signInWithGoogleAuth } = useApp();
 
   const [activeTab, setActiveTab] = useState<'google' | 'admin'>('google');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  // Admin form state
-  const [adminEmail, setAdminEmail] = useState('');
-  const [adminPassword, setAdminPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
 
   const handleGoogleAuth = async () => {
     setIsLoading(true);
@@ -35,30 +27,6 @@ export const AuthGate: React.FC = () => {
       await signInWithGoogleAuth();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Google authentication failed';
-      setErrorMessage(msg);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleAdminAuth = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!adminEmail.trim() || !adminPassword.trim()) {
-      setErrorMessage('Please provide both administrator email and password.');
-      return;
-    }
-
-    if (adminEmail.trim().toLowerCase() !== 'admin@turnitscope.com') {
-      setErrorMessage('Access denied: admin@turnitscope.com is the only authorized administrator. All other accounts must sign in using the Academic User Sign-In portal.');
-      return;
-    }
-
-    setIsLoading(true);
-    setErrorMessage(null);
-    try {
-      await signInWithEmailAuth(adminEmail.trim(), adminPassword.trim());
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Administrator sign-in failed';
       setErrorMessage(msg);
     } finally {
       setIsLoading(false);
@@ -203,14 +171,6 @@ export const AuthGate: React.FC = () => {
                 </p>
               </div>
 
-              {/* Bonus Grant Banner */}
-              <div className="bg-gradient-to-r from-indigo-950/60 to-purple-950/40 border border-indigo-500/20 rounded-2xl p-3.5 flex items-start gap-2.5 text-left">
-                <Sparkles className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                <div className="text-[11px] text-indigo-200 leading-relaxed">
-                  <span className="font-bold text-white">Institutional Grant:</span> All new accounts receive <span className="text-amber-300 font-bold">25 free scanning credits</span> automatically deposited.
-                </div>
-              </div>
-
               {/* Quick switch to Admin */}
               <div className="text-center pt-1">
                 <button
@@ -222,7 +182,7 @@ export const AuthGate: React.FC = () => {
                   className="text-xs text-amber-400/90 hover:text-amber-300 font-medium inline-flex items-center gap-1.5 cursor-pointer underline underline-offset-2 transition"
                 >
                   <KeyRound className="w-3.5 h-3.5" />
-                  <span>Master Administrator Login (Role Admin) →</span>
+                  <span>Master Administrator Login (Google) →</span>
                 </button>
               </div>
             </div>
@@ -230,77 +190,17 @@ export const AuthGate: React.FC = () => {
 
           {/* TAB 2: Administrator Portal */}
           {activeTab === 'admin' && (
-            <form onSubmit={handleAdminAuth} className="space-y-4 animate-in fade-in duration-200">
+            <div className="space-y-5 animate-in fade-in duration-200">
               <div className="text-center space-y-1">
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px] font-bold mb-1">
-                  <UserCheck className="w-3.5 h-3.5" />
-                  <span>Master Administrator Access</span>
-                </div>
                 <h2 className="text-lg font-bold text-white tracking-tight">
-                  System Admin Sign-In
+                  Admin Sign-In
                 </h2>
-                <p className="text-xs text-slate-400">
-                  Full control over users, credits, vouchers, and app data.
-                </p>
-              </div>
-
-              {/* Email Input */}
-              <div className="space-y-1 text-left">
-                <label className="text-xs font-semibold text-slate-300">
-                  Administrator Email
-                </label>
-                <div className="relative">
-                  <input
-                    type="email"
-                    value={adminEmail}
-                    onChange={(e) => setAdminEmail(e.target.value)}
-                    placeholder="admin@turnitscope.com"
-                    required
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
-                  />
-                </div>
-              </div>
-
-              {/* Password Input */}
-              <div className="space-y-1 text-left">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-slate-300">
-                    Administrator Password
-                  </label>
-                </div>
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={adminPassword}
-                    onChange={(e) => setAdminPassword(e.target.value)}
-                    placeholder="••••••••••••••••"
-                    required
-                    className="w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 cursor-pointer"
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-
-              {/* Credential Reference Chip */}
-              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 text-[11px] text-slate-300 space-y-1 text-left">
-                <div className="flex items-center justify-between font-mono text-[10px] text-amber-300">
-                  <span>Role: Master Admin</span>
-                  <span>5,000 Quota</span>
-                </div>
-                <p className="text-slate-400 text-[10px]">
-                  Handles all user accounts, scan limits, promo codes, and cloud reports.
-                </p>
               </div>
 
               {/* Submit Admin Button */}
               <button
-                type="submit"
+                type="button"
+                onClick={handleGoogleAuth}
                 disabled={isLoading}
                 id="btn-gate-admin-submit"
                 className="w-full py-3 px-5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-sm transition duration-150 flex items-center justify-center gap-2 shadow-xl active:scale-98 disabled:opacity-70 cursor-pointer"
@@ -308,12 +208,12 @@ export const AuthGate: React.FC = () => {
                 {isLoading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
-                    <span>Verifying Admin Access...</span>
+                    <span>Opening Google sign-in...</span>
                   </>
                 ) : (
                   <>
                     <KeyRound className="w-4 h-4" />
-                    <span>Sign In as Master Admin</span>
+                    <span>Continue with Google</span>
                   </>
                 )}
               </button>
@@ -327,10 +227,10 @@ export const AuthGate: React.FC = () => {
                   }}
                   className="text-xs text-slate-400 hover:text-slate-200 cursor-pointer underline"
                 >
-                  ← Return to Google Sign-In
+                  ← Return to User Sign-In
                 </button>
               </div>
-            </form>
+            </div>
           )}
 
           {/* Feedback messages */}
@@ -345,7 +245,7 @@ export const AuthGate: React.FC = () => {
           )}
 
           {/* Features highlight */}
-          <div className="grid grid-cols-2 gap-2.5 pt-1">
+          {activeTab === 'google' && <div className="grid grid-cols-2 gap-2.5 pt-1">
             <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 flex items-start gap-2.5">
               <FileSearch className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
               <div>
@@ -361,13 +261,13 @@ export const AuthGate: React.FC = () => {
                 <p className="text-[10px] text-slate-400 leading-tight mt-0.5">Linguistic entropy metrics</p>
               </div>
             </div>
-          </div>
+          </div>}
 
           {/* Footer Security Badge */}
-          <div className="pt-2 border-t border-slate-700/50 flex items-center justify-center gap-2 text-[11px] text-slate-400">
+          {activeTab === 'google' && <div className="pt-2 border-t border-slate-700/50 flex items-center justify-center gap-2 text-[11px] text-slate-400">
             <Lock className="w-3.5 h-3.5 text-slate-500" />
             <span>Encrypted end-to-end via Firebase Cloud Identity</span>
-          </div>
+          </div>}
         </div>
       </div>
     </div>

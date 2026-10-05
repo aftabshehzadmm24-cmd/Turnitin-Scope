@@ -12,9 +12,12 @@ import {
   Sparkles,
   ExternalLink,
   Plus,
-  Coins,
   CheckCircle2,
   FileUp,
+  BadgeCheck,
+  CreditCard,
+  KeyRound,
+  Loader2,
 } from 'lucide-react';
 
 interface DashboardViewProps {
@@ -28,12 +31,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenReport }) =>
     runScan,
     isScanning,
     setActiveTab,
-    setActivePanel,
   } = useApp();
 
   const [selectedMode, setSelectedMode] = useState<ScanMode>('both');
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
   const [excludeBibliography, setExcludeBibliography] = useState(true);
   const [excludeQuotes, setExcludeQuotes] = useState(true);
 
@@ -59,7 +59,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenReport }) =>
   };
 
   const currentCost = modeCosts[selectedMode];
-  const hasSufficientCredits = currentUser.credits >= currentCost;
+  const isPlanExpired = typeof currentUser.planExpiresAt === 'number' && Date.now() >= currentUser.planExpiresAt;
+  const hasSufficientCredits = !isPlanExpired && currentUser.credits >= currentCost;
+
+  const creditSummary = [
+    { label: 'Available', value: currentUser.credits },
+    { label: 'Used', value: currentUser.usedCredits ?? 0 },
+  ];
 
   // Handle file selection
   const handleFiles = async (files: FileList | null) => {
@@ -128,13 +134,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenReport }) =>
     await runScan({
       fileName,
       mode: selectedMode,
-      authorFirst: firstName,
-      authorLast: lastName,
       excludeBibliography,
       excludeQuotes,
       fileContent: content,
       fileData: uploadedFile?.docData?.fileData,
       fileMimeType: uploadedFile?.docData?.fileMimeType,
+      sourceFileData: uploadedFile?.docData?.sourceFileData,
+      sourceFileMimeType: uploadedFile?.docData?.sourceFileMimeType,
+      sourceFileSize: uploadedFile?.docData?.sourceFileSize,
       htmlContent: uploadedFile?.docData?.htmlContent,
       htmlPages: uploadedFile?.docData?.htmlPages,
       pageCount: uploadedFile?.docData?.pageCount,
@@ -144,6 +151,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenReport }) =>
 
   return (
     <div className="space-y-6 pb-12" id="dashboard-view">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" id="client-credit-summary">
+        {creditSummary.map(item => (
+          <div key={item.label} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">{item.label} Credits</p>
+            <p className="mt-2 text-2xl font-extrabold text-slate-900">{item.value}</p>
+          </div>
+        ))}
+      </div>
+
       {/* 3 Top Mode Cards matching screenshot */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4" id="mode-selector-grid">
         {/* Card 1: AI Detection */}
@@ -200,31 +216,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenReport }) =>
 
       {/* Main Upload / Configuration Card */}
       <div className="overflow-visible rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm sm:p-6" id="upload-panel-card">
-        {/* Author Name Section */}
-        <div>
-          <label className="block text-xs font-semibold text-slate-600 mb-2">
-            Author Name (Optional)
-          </label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <input
-              type="text"
-              value={firstName}
-              onChange={e => setFirstName(e.target.value)}
-              placeholder="First Name"
-              className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition"
-              id="input-author-firstname"
-            />
-            <input
-              type="text"
-              value={lastName}
-              onChange={e => setLastName(e.target.value)}
-              placeholder="Last Name"
-              className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition"
-              id="input-author-lastname"
-            />
-          </div>
-        </div>
-
         {/* Optional Checkboxes (Visible for Plagiarism or Both) */}
         {selectedMode !== 'ai' && (
           <div className="flex flex-wrap items-center gap-6 pt-1 text-xs text-slate-700">
@@ -415,29 +406,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenReport }) =>
             <div className="flex items-center gap-2.5">
               <span className="text-base shrink-0">⚠️</span>
               <div>
-                <span className="font-semibold">
-                  You've reached your daily upload limit or have insufficient credits ({currentUser.credits}/{currentCost}).
-                </span>
-                <span className="block sm:inline text-red-600 text-[11px] sm:ml-1">
-                  Redeem a code below or ask Admin to allocate credits.
-                </span>
+                <div>
+                  <span className="font-semibold">
+                    {isPlanExpired
+                      ? 'Your plan has expired. Redeem a new purchase key to continue scanning.'
+                      : `You have insufficient quota for this upload (${currentUser.credits}/${currentCost}).`}
+                  </span>
+                  {isPlanExpired && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('redeem')}
+                      className="ml-2 font-bold text-red-700 underline underline-offset-2"
+                    >
+                      Redeem Code
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => setActiveTab('redeem')}
-                className="bg-white hover:bg-red-100 text-red-700 font-bold px-3 py-1.5 rounded-lg border border-red-200 shadow-2xs transition"
-              >
-                Redeem Code 🎫
-              </button>
-              <button
-                onClick={() => setActivePanel('admin')}
-                className="bg-red-700 hover:bg-red-800 text-white font-bold px-3 py-1.5 rounded-lg shadow-2xs transition"
-              >
-                + Give Credits in Admin
-              </button>
-            </div>
           </div>
         )}
 
@@ -571,6 +558,99 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenReport }) =>
           </div>
         )}
       </div>
+    </div>
+  );
+};
+
+export const RedeemCodeView: React.FC = () => {
+  const { currentUser, redeemPurchaseKey } = useApp();
+  const [key, setKey] = useState('');
+  const [isRedeeming, setIsRedeeming] = useState(false);
+
+  const expiryDate = currentUser.planExpiresAt
+    ? new Date(currentUser.planExpiresAt).toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'long',
+        day: '2-digit',
+      })
+    : currentUser.planExpiry
+      ? new Date(`${currentUser.planExpiry}T00:00:00`).toLocaleDateString(undefined, {
+          year: 'numeric',
+          month: 'long',
+          day: '2-digit',
+        })
+      : 'No active expiry';
+
+  const handleRedeem = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (isRedeeming || !key.trim()) return;
+
+    setIsRedeeming(true);
+    try {
+      const wasRedeemed = await redeemPurchaseKey(key);
+      if (wasRedeemed) setKey('');
+    } finally {
+      setIsRedeeming(false);
+    }
+  };
+
+  return (
+    <div className="max-w-4xl space-y-5" id="redeem-code-view">
+      <div>
+        <h2 className="text-xl font-bold text-slate-900">Redeem Activation Code</h2>
+        <p className="mt-1 text-sm text-slate-500">Enter a purchase key to add credits to your account.</p>
+      </div>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-9">
+        <div className="mx-auto max-w-md text-center">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-blue-50 text-blue-700">
+            <KeyRound className="h-6 w-6" />
+          </div>
+          <h3 className="mt-4 text-lg font-bold text-slate-900">Enter Your Purchase Key</h3>
+          <p className="mt-1 text-sm text-slate-500">Your credits will be added immediately and your plan will be active for one month.</p>
+
+          <form onSubmit={handleRedeem} className="mt-7 space-y-3 text-left">
+            <label htmlFor="purchase-key-input" className="block text-xs font-semibold text-slate-700">Purchase key</label>
+            <input
+              id="purchase-key-input"
+              type="text"
+              autoComplete="off"
+              autoCapitalize="characters"
+              maxLength={32}
+              required
+              value={key}
+              onChange={event => setKey(event.target.value.toUpperCase())}
+              placeholder="TZ-XXXXX-XXXXX-XXXXX-XXXXX"
+              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-center font-mono text-sm uppercase tracking-widest text-slate-900 placeholder:normal-case placeholder:tracking-normal placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/15"
+            />
+            <button
+              type="submit"
+              disabled={isRedeeming || !key.trim()}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isRedeeming ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
+              {isRedeeming ? 'Redeeming...' : 'Redeem Code'}
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <h3 className="flex items-center gap-2 text-sm font-bold text-slate-900">
+          <BadgeCheck className="h-4 w-4 text-emerald-600" />
+          Your Current Status
+        </h3>
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="rounded-xl bg-slate-50 p-4">
+            <p className="text-xs text-slate-500">Current Credits</p>
+            <p className="mt-1 text-2xl font-bold text-slate-900">{currentUser.credits}</p>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-4">
+            <p className="text-xs text-slate-500">Plan Expires</p>
+            <p className="mt-1 text-lg font-bold text-slate-900">{expiryDate}</p>
+          </div>
+        </div>
+      </section>
     </div>
   );
 };

@@ -11,6 +11,7 @@ import {
   HelpCircle,
   ExternalLink,
   FileText,
+  Bot,
 } from 'lucide-react';
 
 /**
@@ -303,6 +304,8 @@ export const TurnitinAIOverviewPage: React.FC<{
 }> = ({ report, totalPages }) => {
   const submissionId = report.submissionId || 'trn:oid:::1:9948210344';
   const isBelowThreshold = report.aiScore <= 20 && report.aiScore >= 1;
+  const showAiGeneratedSummary = report.aiScore >= 21 && report.aiScore <= 70;
+  const aiGeneratedCount = report.snippets.filter(snippet => snippet.type === 'ai_generated').length;
   const scoreDisplay = formatTurnitinAiScore(report.aiScore);
 
   return (
@@ -322,12 +325,15 @@ export const TurnitinAIOverviewPage: React.FC<{
             <h1 className="text-[22px] sm:text-[23px] font-bold text-black tracking-tight leading-none m-0 p-0 font-['Outfit',sans-serif]">
               {scoreDisplay} detected as AI
             </h1>
-            <p className="text-[10px] sm:text-[10.5px] text-slate-800 leading-[1.35] mt-1">
+            <p className="text-[8px] sm:text-[8.5px] text-slate-800 leading-[1.25] mt-1">
               {isBelowThreshold ? (
-                <span className="font-bold text-black">
-                  AI detection includes the possibility of false positives. Although some text in
-                  this submission is likely AI generated, scores below the 20% threshold are not
-                  surfaced because they have a higher likelihood of false positives.
+                <span className="font-normal text-black">
+                  <span className="block text-[9px] sm:text-[9.5px]">
+                    AI detection can produce false positives. Scores below 20%
+                  </span>
+                  <span className="block text-[8px] sm:text-[8.5px]">
+                    are hidden because they are more likely to be false positives.
+                  </span>
                 </span>
               ) : report.aiScore === 0 ? (
                 <span className="font-normal text-slate-800">
@@ -360,18 +366,31 @@ export const TurnitinAIOverviewPage: React.FC<{
         {/* Thin Divider Rule */}
         <hr className="border-slate-200 my-0" />
 
+        {showAiGeneratedSummary && (
+          <div className="flex items-center gap-3 border-b border-slate-200 py-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-cyan-500 text-white">
+              <Bot className="h-4 w-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[11px] font-bold leading-tight text-black">
+                {aiGeneratedCount} AI-generated {report.aiScore}%
+              </p>
+              <p className="mt-0.5 text-[9px] leading-tight text-slate-600">
+                Likely generated or likely generated and revised by AI.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Disclaimer Section (1-line gap below underline, increased font size by 2, 0 gap before sentence) */}
         <div className="space-y-0.5 pt-3.5">
-          <h2 className="text-[13px] font-bold text-black leading-none m-0 p-0">
+          <h2 className="text-[13px] font-normal text-black leading-none m-0 p-0">
             Disclaimer
           </h2>
-          <p className="text-[10px] sm:text-[10.5px] text-slate-700 leading-relaxed text-justify mt-1.5 p-0">
-            Our AI writing assessment is designed to help educators identify text that might be prepared
-            by a generative AI tool. Our AI writing assessment may not always be accurate (it may misidentify
-            writing that is likely human generated as AI generated and likely AI generated as human generated)
-            so it should not be used as the sole basis for adverse actions against a student. It takes
-            further scrutiny and human judgment in conjunction with an organization's application of its specific
-            academic policies to determine whether any academic misconduct has occurred.
+          <p className="text-[7px] sm:text-[7.5px] text-slate-700 leading-[1.25] mt-1.5 p-0">
+            Our AI writing assessment is designed to help educators identify text that might be prepared by a generative AI tool. Our AI writing assessment may not always be accurate<br />
+            (it may misidentify writing that is likely human generated as AI generated and likely AI generated as human generated) so it should not be used as the sole basis for adverse actions against a student.<br />
+            It takes further scrutiny and human judgment in conjunction with an organization's application of its specific academic policies to determine whether any academic misconduct has occurred.
           </p>
         </div>
 

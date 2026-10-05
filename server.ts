@@ -2,13 +2,42 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { convertDocxToPdf } from "./server/docxConverter.ts";
+import { getAvailablePort } from "./server/port.ts";
 
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  const preferredPort = Number(process.env.PORT) || 3000;
+  const PORT = await getAvailablePort(preferredPort);
+
+  if (PORT !== preferredPort) {
+    console.warn(`Port ${preferredPort} is busy; using fallback port ${PORT} instead.`);
+  }
 
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+  const configuredOrigins = (process.env.FRONTEND_ORIGIN || "")
+    .split(",")
+    .map(origin => origin.trim())
+    .filter(Boolean);
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    const isLocalDevelopment = process.env.NODE_ENV !== "production"
+      && (origin === "http://localhost:3000" || origin === "http://127.0.0.1:3000");
+
+    if (origin && (configuredOrigins.includes(origin) || isLocalDevelopment)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    }
+
+    if (req.method === "OPTIONS") {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  });
 
   // API health check (critical for Cloud Run deployment health checks)
   app.get("/api/health", (_req, res) => {

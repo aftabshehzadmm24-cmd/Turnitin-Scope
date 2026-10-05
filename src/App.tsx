@@ -1,10 +1,9 @@
-import React from 'react';
-import { AppProvider, useApp } from './context/AppContext';
+import React, { useEffect, useRef, useState } from 'react';
+import { AppProvider, isAdminEmail, useApp } from './context/AppContext';
 import { ClientSidebar } from './components/ClientSidebar';
 import { ClientHeader } from './components/ClientHeader';
-import { DashboardView } from './components/DashboardView';
+import { DashboardView, RedeemCodeView } from './components/DashboardView';
 import { ReportsView } from './components/ReportsView';
-import { RedeemCodeView } from './components/RedeemCodeView';
 import { AdminPanel } from './components/AdminPanel';
 import { ReportModal } from './components/ReportModal';
 import { ScanProgressModal } from './components/ScanProgressModal';
@@ -15,9 +14,14 @@ import { ToastNotificationBanner } from './components/ToastNotificationBanner';
 import { ScanReport } from './types';
 import { CheckCircle2, AlertCircle, Info, Loader2 } from 'lucide-react';
 
+const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
+const IDLE_WARNING_MS = 60 * 1000;
+const ACTIVITY_STORAGE_PREFIX = 'turnitscope:last-activity:';
+
 const AppContent: React.FC = () => {
   const {
     currentUser,
+    reports,
     activePanel,
     activeTab,
     selectedReport,
@@ -26,7 +30,78 @@ const AppContent: React.FC = () => {
     setNotification,
     firebaseUser,
     isAuthLoading,
+    isScanning,
+    signOutAuth,
   } = useApp();
+  const [showIdleWarning, setShowIdleWarning] = useState(false);
+  const signOutAuthRef = useRef(signOutAuth);
+  signOutAuthRef.current = signOutAuth;
+
+  useEffect(() => {
+    if (!firebaseUser?.uid) {
+      setShowIdleWarning(false);
+      return;
+    }
+
+    const activityStorageKey = `${ACTIVITY_STORAGE_PREFIX}${firebaseUser.uid}`;
+    let lastActivityWrite = Date.now();
+    let isSigningOut = false;
+    localStorage.setItem(activityStorageKey, String(lastActivityWrite));
+
+    const recordActivity = () => {
+      const now = Date.now();
+      if (now - lastActivityWrite >= 10_000) {
+        lastActivityWrite = now;
+        localStorage.setItem(activityStorageKey, String(now));
+      }
+      setShowIdleWarning(false);
+    };
+
+    const checkIdleTime = () => {
+      if (isScanning) {
+        recordActivity();
+        return;
+      }
+
+      const lastActivity = Number(localStorage.getItem(activityStorageKey)) || lastActivityWrite;
+      const idleDuration = Date.now() - lastActivity;
+      if (idleDuration >= IDLE_TIMEOUT_MS) {
+        if (!isSigningOut) {
+          isSigningOut = true;
+          void signOutAuthRef.current();
+        }
+        return;
+      }
+
+      const shouldWarn = idleDuration >= IDLE_TIMEOUT_MS - IDLE_WARNING_MS;
+      setShowIdleWarning(previous => previous === shouldWarn ? previous : shouldWarn);
+    };
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === activityStorageKey && event.newValue) {
+        setShowIdleWarning(false);
+      }
+    };
+
+    const activityEvents: Array<keyof WindowEventMap> = [
+      'pointerdown',
+      'keydown',
+      'touchstart',
+      'scroll',
+      'mousemove',
+    ];
+    activityEvents.forEach(eventName => window.addEventListener(eventName, recordActivity, { passive: true }));
+    window.addEventListener('storage', handleStorage);
+    document.addEventListener('visibilitychange', recordActivity);
+    const timer = window.setInterval(checkIdleTime, 5_000);
+
+    return () => {
+      window.clearInterval(timer);
+      activityEvents.forEach(eventName => window.removeEventListener(eventName, recordActivity));
+      window.removeEventListener('storage', handleStorage);
+      document.removeEventListener('visibilitychange', recordActivity);
+    };
+  }, [firebaseUser?.uid, isScanning]);
 
   const getPageInfo = () => {
     switch (activeTab) {
@@ -60,10 +135,32 @@ const AppContent: React.FC = () => {
   }
 
   const pageInfo = getPageInfo() || { title: 'Dashboard', iconSuffix: '' };
-  const isAdmin = currentUser?.role === 'admin' && currentUser?.email?.toLowerCase() === 'admin@turnitscope.com';
+  const isAdmin = currentUser?.role === 'admin' && isAdminEmail(currentUser.email);
+  const reportForModal = selectedReport
+    ? reports.find(report => report.id === selectedReport.id) || selectedReport
+    : null;
 
   return (
     <>
+      {showIdleWarning && (
+        <div
+          className="fixed left-1/2 top-3 z-[60] flex w-[calc(100%-1.5rem)] max-w-xl -translate-x-1/2 items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 shadow-lg"
+          role="alert"
+          aria-live="assertive"
+        >
+          <span className="text-xs font-semibold">You’ll be signed out in about one minute due to inactivity.</span>
+          <button
+            type="button"
+            onClick={() => {
+              localStorage.setItem(`${ACTIVITY_STORAGE_PREFIX}${firebaseUser.uid}`, String(Date.now()));
+              setShowIdleWarning(false);
+            }}
+            className="shrink-0 rounded-lg bg-amber-200 px-3 py-1.5 text-xs font-bold hover:bg-amber-300"
+          >
+            Stay signed in
+          </button>
+        </div>
+      )}
       {isAdmin ? (
         <AdminPanel />
       ) : (
@@ -90,13 +187,13 @@ const AppContent: React.FC = () => {
         </div>
       )}
 
-      {/* Academic Profile & Account Settings Modal */}
+      {/* Profile Settings Modal */}
       <ProfileEditModal />
 
       {/* Interactive Turnitin Report Inspection Modal */}
-      {selectedReport && (
+      {reportForModal && (
         <ReportModal
-          report={selectedReport}
+          report={reportForModal}
           onClose={() => setSelectedReport(null)}
         />
       )}

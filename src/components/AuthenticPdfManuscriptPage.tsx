@@ -4,323 +4,234 @@ import { cleanBase64ToUint8Array } from '../utils/pdfPageRenderer';
 import { DynamicTurnitinManuscriptPage } from '../utils/dynamicManuscriptEngine';
 import { TurnitinPageHeader, TurnitinPageFooter } from './TurnitinOfficialPages';
 import {
-  computeHighlightsForPage,
-  getHighlightTheme,
-  DocHighlightBox,
-  RawTextItem,
+	computeHighlightsForPage,
+	getHighlightTheme,
+	DocHighlightBox,
+	RawTextItem,
 } from '../utils/authenticDocHighlighter';
 import * as pdfjsLib from 'pdfjs-dist';
 
 export interface AuthenticPdfManuscriptPageProps {
-  report: ScanReport;
-  mode: 'ai' | 'similarity';
-  pageIndex: number; // 0-based page index of the user's document
-  pageNumber: number; // Overall Turnitin report page number
-  totalPages: number;
+	report: ScanReport;
+	mode: 'ai' | 'similarity';
+	pageIndex: number;
+	pageNumber: number;
+	totalPages: number;
 }
 
 interface TextItemOverlay extends RawTextItem {}
 
 export const AuthenticPdfManuscriptPage: React.FC<AuthenticPdfManuscriptPageProps> = ({
-  report,
-  mode,
-  pageIndex,
-  pageNumber,
-  totalPages,
+	report,
+	mode,
+	pageIndex,
+	pageNumber,
+	totalPages,
 }) => {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [loadError, setLoadError] = useState<boolean>(false);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [textItems, setTextItems] = useState<TextItemOverlay[]>([]);
-  const [pageDimensions, setPageDimensions] = useState<{ width: number; height: number } | null>(null);
+	const canvasRef = useRef<HTMLCanvasElement | null>(null);
+	const containerRef = useRef<HTMLDivElement | null>(null);
+	const [loadError, setLoadError] = useState<boolean>(false);
+	const [loading, setLoading] = useState<boolean>(true);
+	const [textItems, setTextItems] = useState<TextItemOverlay[]>([]);
+	const [pageDimensions, setPageDimensions] = useState<{ width: number; height: number } | null>(null);
+	const [renderAreaSize, setRenderAreaSize] = useState<{ width: number; height: number } | null>(null);
 
-  useEffect(() => {
-    let isMounted = true;
-    if (!report.fileData) {
-      setLoadError(true);
-      return;
-    }
+	useEffect(() => {
+		const renderArea = containerRef.current;
+		if (!renderArea || typeof ResizeObserver === 'undefined') return;
 
-    async function renderPage() {
-      try {
-        setLoading(true);
-        const bytes = cleanBase64ToUint8Array(report.fileData);
-        if (!bytes || bytes.length === 0) {
-          throw new Error('Invalid PDF byte buffer');
-        }
+		const observer = new ResizeObserver(([entry]) => {
+			setRenderAreaSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+		});
+		observer.observe(renderArea);
+		return () => observer.disconnect();
+	}, []);
 
-        const loadingTask = pdfjsLib.getDocument({
-          data: bytes,
-          useSystemFonts: true,
-        });
+	useEffect(() => {
+		let isMounted = true;
+		if (!report.fileData) {
+			setLoadError(true);
+			setLoading(false);
+			return;
+		}
 
-        const pdf = await loadingTask.promise;
-        const targetPageNum = pageIndex + 1;
-        if (targetPageNum > pdf.numPages) {
-          throw new Error(`Page ${targetPageNum} exceeds total pages ${pdf.numPages}`);
-        }
+		async function renderPage() {
+			try {
+				setLoading(true);
+				setLoadError(false);
+				const bytes = cleanBase64ToUint8Array(report.fileData || '');
+				if (!bytes.length) throw new Error('Invalid PDF byte buffer');
 
-        const page = await pdf.getPage(targetPageNum);
-        // Base viewport for layout aspect ratio
-        const baseViewport = page.getViewport({ scale: 1.0 });
-        // High-res render scale for crystal sharp tables, graphs, logos, and fonts
-        const renderScale = 2.0;
-        const renderViewport = page.getViewport({ scale: renderScale });
+				const loadingTask = pdfjsLib.getDocument({ data: bytes, useSystemFonts: true });
+				const pdf = await loadingTask.promise;
+				const targetPageNum = pageIndex + 1;
+				if (targetPageNum > pdf.numPages) {
+					throw new Error(`Page ${targetPageNum} exceeds total pages ${pdf.numPages}`);
+				}
 
-        if (!isMounted) return;
+				const page = await pdf.getPage(targetPageNum);
+				const baseViewport = page.getViewport({ scale: 1 });
+				const renderViewport = page.getViewport({ scale: 2 });
+				if (!isMounted) return;
 
-        setPageDimensions({
-          width: baseViewport.width,
-          height: baseViewport.height,
-        });
+				setPageDimensions({ width: baseViewport.width, height: baseViewport.height });
+				const canvas = canvasRef.current;
+				const context = canvas?.getContext('2d');
+				if (canvas && context) {
+					canvas.width = renderViewport.width;
+					canvas.height = renderViewport.height;
+					await page.render({ canvasContext: context, viewport: renderViewport, canvas } as any).promise;
+				}
 
-        const canvas = canvasRef.current;
-        if (canvas) {
-          canvas.width = renderViewport.width;
-          canvas.height = renderViewport.height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            await page.render({
-              canvasContext: ctx,
-              viewport: renderViewport,
-              canvas,
-            } as any).promise;
-          }
-        }
+				try {
+					const textContent = await page.getTextContent();
+					const overlays: TextItemOverlay[] = [];
+					for (const item of textContent.items as any[]) {
+						if (!item.str || !item.transform) continue;
+						const [left, baseline] = baseViewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+						const fontSize = Math.sqrt(item.transform[0] ** 2 + item.transform[1] ** 2);
+						overlays.push({
+							str: item.str,
+							left,
+							top: Math.max(0, baseline - fontSize * 0.88),
+							width: Math.max((item.width || 0) * baseViewport.scale, 4),
+							height: Math.max(fontSize, 12),
+							fontSize,
+						});
+					}
+					if (isMounted) setTextItems(overlays);
+				} catch (error) {
+					console.warn('Text layer extraction notice:', error);
+				}
+				if (isMounted) setLoading(false);
+			} catch (error) {
+				console.warn('Authentic PDF page render failed:', error);
+				if (isMounted) {
+					setLoadError(true);
+					setLoading(false);
+				}
+			}
+		}
 
-        // Extract text items for text selection, copy-pasting, and searchability
-        try {
-          const textContent = await page.getTextContent();
-          const overlays: TextItemOverlay[] = [];
+		void renderPage();
+		return () => {
+			isMounted = false;
+		};
+	}, [report.fileData, pageIndex]);
 
-          for (const item of textContent.items as any[]) {
-            if (!item.str || !item.transform) continue;
-            // Convert PDF coordinates to viewport coordinates (scale: 1.0)
-            const [vx, vy] = baseViewport.convertToViewportPoint(item.transform[4], item.transform[5]);
-            const fontSize = Math.sqrt(
-              item.transform[0] * item.transform[0] + item.transform[1] * item.transform[1]
-            );
-            const width = (item.width || 0) * baseViewport.scale;
-            const height = Math.max(fontSize, 12);
-            // vy is the baseline from top, so top edge is roughly vy - fontSize * 0.85
-            const top = Math.max(0, vy - fontSize * 0.88);
+	const submissionId = report.submissionId || 'trn:oid:::2:445438161';
+	const sectionTitle = mode === 'ai' ? 'AI Writing Submission' : 'Submission';
 
-            overlays.push({
-              str: item.str,
-              left: vx,
-              top,
-              width: Math.max(width, 4),
-              height,
-              fontSize,
-            });
-          }
+	const highlights = useMemo<DocHighlightBox[]>(() => {
+		if (!pageDimensions || !textItems.length) return [];
+		return computeHighlightsForPage(textItems, pageDimensions.width, pageDimensions.height, pageIndex, report, mode);
+	}, [textItems, pageDimensions, pageIndex, report, mode]);
 
-          if (isMounted) {
-            setTextItems(overlays);
-          }
-        } catch (textErr) {
-          console.warn('Text layer extraction notice:', textErr);
-        }
+	const pageScale = pageDimensions && renderAreaSize
+		? Math.min(1, renderAreaSize.width / pageDimensions.width, Math.max(0, renderAreaSize.height - 32) / pageDimensions.height)
+		: 1;
+	const displayedPageWidth = pageDimensions ? pageDimensions.width * pageScale : undefined;
 
-        if (isMounted) {
-          setLoading(false);
-        }
-      } catch (err) {
-        console.warn('AuthenticPdfManuscriptPage render error, falling back to dynamic engine:', err);
-        if (isMounted) {
-          setLoadError(true);
-          setLoading(false);
-        }
-      }
-    }
+	if (loadError || !report.fileData) {
+		return (
+			<DynamicTurnitinManuscriptPage
+				report={report}
+				mode={mode}
+				pageIndex={pageIndex}
+				pageNumber={pageNumber}
+				totalPages={totalPages}
+			/>
+		);
+	}
 
-    renderPage();
+	return (
+		<div
+			className="turnitin-authentic-pdf-page relative flex h-full min-h-[960px] w-full flex-col justify-between bg-white p-6 font-sans text-slate-900 sm:p-10"
+			style={{ boxSizing: 'border-box' }}
+		>
+			<TurnitinPageHeader pageNumber={pageNumber} totalPages={totalPages} sectionTitle={sectionTitle} submissionId={submissionId} />
 
-    return () => {
-      isMounted = false;
-    };
-  }, [report.fileData, pageIndex]);
+			<div ref={containerRef} className="relative my-4 flex flex-1 items-center justify-center overflow-hidden bg-white py-2">
+				{loading && (
+					<div className="absolute inset-0 z-20 flex items-center justify-center bg-white/80">
+						<div className="flex items-center gap-2 text-xs text-slate-500">
+							<div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+							<span>Rendering original document page {pageIndex + 1}...</span>
+						</div>
+					</div>
+				)}
 
-  const submissionId = report.submissionId || 'trn:oid:::2:445438161';
-  const sectionTitle = mode === 'ai' ? 'AI Writing Submission' : 'Submission';
+				<div
+					className="relative max-w-full border border-slate-200/60 bg-white shadow-xs"
+					style={{
+						width: displayedPageWidth ? `${displayedPageWidth}px` : '100%',
+						maxWidth: '100%',
+						aspectRatio: pageDimensions ? `${pageDimensions.width} / ${pageDimensions.height}` : '8.5 / 11',
+					}}
+				>
+					<canvas ref={canvasRef} className="block h-auto w-full" />
 
-  // Compute Turnitin document highlights directly for this page (hook must run unconditionally)
-  const highlights = useMemo<DocHighlightBox[]>(() => {
-    if (!pageDimensions || textItems.length === 0) return [];
-    return computeHighlightsForPage(
-      textItems,
-      pageDimensions.width,
-      pageDimensions.height,
-      pageIndex,
-      report,
-      mode
-    );
-  }, [textItems, pageDimensions, pageIndex, report, mode]);
+					{highlights.length > 0 && (
+						<div className="pointer-events-none absolute inset-0 z-10 select-none overflow-hidden">
+							{highlights.map(highlight => {
+								if (!pageDimensions) return null;
+								const theme = getHighlightTheme(highlight.type, highlight.sourceIndex);
+								return (
+									<React.Fragment key={highlight.id}>
+										<div
+											className="absolute rounded-[1.5px]"
+											style={{
+												left: `${(highlight.left / pageDimensions.width) * 100}%`,
+												top: `${(highlight.top / pageDimensions.height) * 100}%`,
+												width: `${(highlight.width / pageDimensions.width) * 100}%`,
+												height: `${(highlight.height / pageDimensions.height) * 100}%`,
+												backgroundColor: theme.bg,
+												mixBlendMode: 'multiply',
+											}}
+										/>
+										{highlight.showBadge && highlight.badgeNumber && (
+											<span
+												className="absolute inline-flex h-[13px] w-[13px] items-center justify-center rounded-full font-mono text-[8px] font-bold leading-none text-white"
+												style={{
+													left: `${((highlight.badgeLeft ?? Math.max(10, highlight.left - 15)) / pageDimensions.width) * 100}%`,
+													top: `${((highlight.badgeTop ?? highlight.top) / pageDimensions.height) * 100}%`,
+													backgroundColor: theme.badgeBg,
+												}}
+											>
+												{highlight.badgeNumber}
+											</span>
+										)}
+									</React.Fragment>
+								);
+							})}
+						</div>
+					)}
 
-  // Fallback to dynamic manuscript engine if PDF rendering fails or fileData is unavailable
-  if (loadError || !report.fileData) {
-    return (
-      <DynamicTurnitinManuscriptPage
-        report={report}
-        mode={mode}
-        pageIndex={pageIndex}
-        pageNumber={pageNumber}
-        totalPages={totalPages}
-      />
-    );
-  }
+					<div className="pointer-events-auto absolute inset-0 select-text overflow-hidden">
+						{textItems.map((item, index) => {
+							if (!pageDimensions) return null;
+							return (
+								<span
+									key={`text-item-${index}`}
+									className="absolute cursor-text whitespace-pre text-transparent selection:bg-blue-500/30"
+									style={{
+										left: `${(item.left / pageDimensions.width) * 100}%`,
+										top: `${(item.top / pageDimensions.height) * 100}%`,
+										width: `${(item.width / pageDimensions.width) * 100}%`,
+										fontSize: `${item.fontSize * pageScale}px`,
+										lineHeight: '1.1',
+										userSelect: 'text',
+									}}
+								>
+									{item.str}
+								</span>
+							);
+						})}
+					</div>
+				</div>
+			</div>
 
-  return (
-    <div
-      ref={containerRef}
-      className="turnitin-authentic-pdf-page flex flex-col justify-between h-full min-h-[960px] font-sans p-6 sm:p-10 text-slate-900 bg-white select-text relative"
-      style={{
-        width: '100%',
-        boxSizing: 'border-box',
-      }}
-    >
-      {/* EXACT TURNITIN OFFICIAL RUNNING HEADER AS OF COVER PAGES */}
-      <TurnitinPageHeader
-        pageNumber={pageNumber}
-        totalPages={totalPages}
-        sectionTitle={sectionTitle}
-        submissionId={submissionId}
-      />
-
-      {/* DOCUMENT CANVAS CONTAINER (PRESERVING 100% TABLES, TOC, GRAPHS, IMAGES, STICKERS, AND LOGOS) */}
-      <div className="flex-1 my-auto relative flex items-center justify-center py-4 overflow-hidden bg-white">
-        {loading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-20">
-            <div className="flex items-center gap-2 text-xs text-slate-500 font-sans">
-              <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-              <span>Rendering authentic document page {pageIndex + 1}...</span>
-            </div>
-          </div>
-        )}
-
-        <div
-          className="relative max-w-full shadow-xs border border-slate-200/60 bg-white"
-          style={{
-            width: pageDimensions ? `${pageDimensions.width}px` : '100%',
-            maxWidth: '100%',
-            aspectRatio: pageDimensions ? `${pageDimensions.width} / ${pageDimensions.height}` : '8.5 / 11',
-          }}
-        >
-          {/* High-Resolution Rendered Canvas */}
-          <canvas
-            ref={canvasRef}
-            className="w-full h-auto block"
-            style={{ display: 'block' }}
-          />
-
-          {/* Turnitin Authentic Document Highlight Layer */}
-          {highlights.length > 0 && (
-            <div
-              className="absolute inset-0 pointer-events-none select-none overflow-hidden"
-              style={{
-                width: '100%',
-                height: '100%',
-                zIndex: 10,
-              }}
-            >
-              {highlights.map(h => {
-                if (!pageDimensions) return null;
-                const leftPercent = (h.left / pageDimensions.width) * 100;
-                const topPercent = (h.top / pageDimensions.height) * 100;
-                const widthPercent = (h.width / pageDimensions.width) * 100;
-                const heightPercent = (h.height / pageDimensions.height) * 100;
-                const theme = getHighlightTheme(h.type, h.sourceIndex);
-
-                return (
-                  <React.Fragment key={h.id}>
-                    {/* Semi-transparent highlight band */}
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: `${leftPercent}%`,
-                        top: `${topPercent}%`,
-                        width: `${widthPercent}%`,
-                        height: `${heightPercent}%`,
-                        backgroundColor: theme.bg,
-                        borderBottom: 'none',
-                        mixBlendMode: 'multiply',
-                        pointerEvents: 'none',
-                      }}
-                      className="rounded-[1.5px]"
-                    />
-
-                    {/* Turnitin numbered badge indicator at start/left of highlight */}
-                    {h.showBadge && h.badgeNumber && (
-                      <span
-                        className="inline-flex items-center justify-center rounded-full font-bold font-mono text-white shadow-xs pointer-events-none select-none"
-                        style={{
-                          position: 'absolute',
-                          left: `${((h.badgeLeft ?? Math.max(10, h.left - 15)) / pageDimensions.width) * 100}%`,
-                          top: `${((h.badgeTop ?? h.top) / pageDimensions.height) * 100}%`,
-                          width: '13px',
-                          height: '13px',
-                          fontSize: '8px',
-                          lineHeight: '1',
-                          backgroundColor: theme.badgeBg,
-                          zIndex: 15,
-                        }}
-                      >
-                        {h.badgeNumber}
-                      </span>
-                    )}
-                  </React.Fragment>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Selectable, Searchable & Copyable Text Layer */}
-          <div
-            className="absolute inset-0 pointer-events-auto select-text overflow-hidden"
-            style={{
-              width: '100%',
-              height: '100%',
-            }}
-          >
-            {textItems.map((item, idx) => {
-              if (!pageDimensions) return null;
-              const leftPercent = (item.left / pageDimensions.width) * 100;
-              const topPercent = (item.top / pageDimensions.height) * 100;
-              const widthPercent = (item.width / pageDimensions.width) * 100;
-
-              return (
-                <span
-                  key={`text-item-${idx}`}
-                  style={{
-                    position: 'absolute',
-                    left: `${leftPercent}%`,
-                    top: `${topPercent}%`,
-                    width: `${widthPercent}%`,
-                    fontSize: `${item.fontSize}px`,
-                    lineHeight: '1.1',
-                    color: 'transparent',
-                    whiteSpace: 'pre',
-                    cursor: 'text',
-                    userSelect: 'text',
-                  }}
-                  className="selection:bg-blue-500/30 selection:text-transparent"
-                >
-                  {item.str}
-                </span>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* EXACT TURNITIN OFFICIAL RUNNING FOOTER AS OF COVER PAGES */}
-      <TurnitinPageFooter
-        pageNumber={pageNumber}
-        totalPages={totalPages}
-        sectionTitle={sectionTitle}
-        submissionId={submissionId}
-      />
-    </div>
-  );
+			<TurnitinPageFooter pageNumber={pageNumber} totalPages={totalPages} sectionTitle={sectionTitle} submissionId={submissionId} />
+		</div>
+	);
 };
