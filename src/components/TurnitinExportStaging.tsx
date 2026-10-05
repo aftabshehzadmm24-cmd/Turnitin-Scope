@@ -39,6 +39,7 @@ export const TurnitinExportStaging: React.FC<TurnitinExportStagingProps> = ({
             <TurnitinIntegrityOverviewPage
               report={report}
               totalPages={layout.totalPages}
+              mode={mode}
             />
           )}
 
@@ -46,6 +47,7 @@ export const TurnitinExportStaging: React.FC<TurnitinExportStagingProps> = ({
             <TurnitinAIOverviewPage
               report={report}
               totalPages={layout.totalPages}
+              mode={mode}
             />
           )}
 
@@ -57,6 +59,7 @@ export const TurnitinExportStaging: React.FC<TurnitinExportStagingProps> = ({
               sourcesSlice={page.sourcesSlice || []}
               startIndex={page.startIndex || 0}
               isFirstSourcePage={page.isFirstSourcePage}
+              mode={mode}
             />
           )}
 

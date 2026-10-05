@@ -318,7 +318,8 @@ export const TurnitinCoverPage: React.FC<{
 export const TurnitinAIOverviewPage: React.FC<{
   report: ScanReport;
   totalPages: number;
-}> = ({ report, totalPages }) => {
+  mode?: 'ai' | 'similarity';
+}> = ({ report, totalPages, mode = 'ai' }) => {
   const submissionId = report.submissionId || 'trn:oid:::1:9948210344';
   const isBelowThreshold = report.aiScore <= 20 && report.aiScore >= 1;
   const showAiGeneratedSummary = report.aiScore >= 21 && report.aiScore <= 70;
@@ -332,7 +333,7 @@ export const TurnitinAIOverviewPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="AI Writing Overview"
         submissionId={submissionId}
-        mode="ai"
+        mode={mode}
       />
 
       <div className="mt-8 mb-auto space-y-6 max-w-4xl w-full">
@@ -421,7 +422,7 @@ export const TurnitinAIOverviewPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="AI Writing Overview"
         submissionId={submissionId}
-        mode="ai"
+        mode={mode}
       />
     </div>
   );
@@ -433,7 +434,8 @@ export const TurnitinAIOverviewPage: React.FC<{
 export const TurnitinIntegrityOverviewPage: React.FC<{
   report: ScanReport;
   totalPages: number;
-}> = ({ report, totalPages }) => {
+  mode?: 'ai' | 'similarity';
+}> = ({ report, totalPages, mode = 'similarity' }) => {
   const submissionId = report.submissionId || 'trn:oid:::2:445438161';
   const plagScore = Math.max(1, clampSimilarityScore(report.plagiarismScore || 1));
   const matchGroups = report.matchGroups || {
@@ -457,7 +459,7 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="Integrity Overview"
         submissionId={submissionId}
-        mode="similarity"
+        mode={mode}
       />
 
       <div className="mt-2 mb-auto space-y-4 max-w-3xl w-full">
@@ -637,7 +639,7 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="Integrity Overview"
         submissionId={submissionId}
-        mode="similarity"
+        mode={mode}
       />
     </div>
   );
@@ -689,7 +691,8 @@ export const TurnitinTopSourcesPage: React.FC<{
   sourcesSlice: MatchedSource[];
   startIndex: number;
   isFirstSourcePage?: boolean;
-}> = ({ report, pageNumber, totalPages, sourcesSlice, startIndex, isFirstSourcePage }) => {
+  mode?: 'ai' | 'similarity';
+}> = ({ report, pageNumber, totalPages, sourcesSlice, startIndex, isFirstSourcePage, mode = 'similarity' }) => {
   const submissionId = report.submissionId || 'trn:oid:::2:445438161';
   const matchGroups = report.matchGroups || {
     notCitedOrQuoted: 51,
@@ -715,7 +718,7 @@ export const TurnitinTopSourcesPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="Integrity Overview"
         submissionId={submissionId}
-        mode="similarity"
+        mode={mode}
       />
 
       <div className="flex-1 pt-3 pb-2 flex flex-col justify-start">
@@ -953,7 +956,7 @@ export const TurnitinTopSourcesPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="Integrity Overview"
         submissionId={submissionId}
-        mode="similarity"
+        mode={mode}
       />
     </div>
   );

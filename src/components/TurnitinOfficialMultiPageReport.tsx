@@ -317,6 +317,7 @@ export const TurnitinOfficialMultiPageReport: React.FC<TurnitinOfficialMultiPage
                   <TurnitinIntegrityOverviewPage
                     report={report}
                     totalPages={totalPages}
+                    mode={reportType}
                   />
                 )}
 
@@ -324,6 +325,7 @@ export const TurnitinOfficialMultiPageReport: React.FC<TurnitinOfficialMultiPage
                   <TurnitinAIOverviewPage
                     report={report}
                     totalPages={totalPages}
+                    mode={reportType}
                   />
                 )}
 
@@ -335,6 +337,7 @@ export const TurnitinOfficialMultiPageReport: React.FC<TurnitinOfficialMultiPage
                     sourcesSlice={page.sourcesSlice || []}
                     startIndex={page.startIndex || 0}
                     isFirstSourcePage={page.isFirstSourcePage}
+                    mode={reportType}
                   />
                 )}
 
