@@ -137,9 +137,12 @@ export const TurnitinPageHeader: React.FC<{
 
   return (
     <div
-      className={`flex items-center justify-between text-[11px] text-slate-700 font-sans px-1 shrink-0 select-text ${
-        hideDivider ? 'border-b-0 pb-0 mb-0' : 'border-b border-slate-100 pb-2.5 mb-6'
-      }`}
+      className="flex items-center justify-between text-[11px] text-slate-700 font-sans px-1 shrink-0 select-text"
+      style={{
+        borderBottom: hideDivider ? 'none' : '1px solid rgb(241 245 249)',
+        paddingBottom: hideDivider ? 0 : 10,
+        marginBottom: hideDivider ? 0 : 24,
+      }}
     >
       <div className="flex items-center gap-6">
         <TurnitinLogoWithText size="sm" />
@@ -170,9 +173,11 @@ export const TurnitinPageFooter: React.FC<{
 
   return (
     <div
-      className={`flex items-center justify-between text-[11px] text-slate-700 font-sans px-1 shrink-0 select-text ${
-        hideDivider ? 'pt-0 mt-0' : 'pt-2.5 mt-6'
-      }`}
+      className="flex items-center justify-between text-[11px] text-slate-700 font-sans px-1 shrink-0 select-text"
+      style={{
+        paddingTop: hideDivider ? 0 : 10,
+        marginTop: hideDivider ? 0 : 24,
+      }}
     >
       <div className="flex items-center gap-6">
         <TurnitinLogoWithText size="sm" />

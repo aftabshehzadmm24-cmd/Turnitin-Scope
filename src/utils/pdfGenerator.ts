@@ -164,6 +164,10 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return bytes;
 }
 
+function shouldHideTurnitinHeaderDivider(pageNum: number, mode: 'ai' | 'similarity') {
+  return mode === 'ai' ? pageNum >= 3 : pageNum >= 4;
+}
+
 function downloadPdfFromBytes(pdfBytes: Uint8Array, fileName: string) {
   const blob = new Blob([pdfBytes], { type: 'application/pdf' });
   const url = URL.createObjectURL(blob);
@@ -372,12 +376,14 @@ async function mergeTurnitinCoverWithUserPdf(
     });
 
     // Divider Line below header
-    page.drawLine({
-      start: { x: margin, y: height - 42 },
-      end: { x: width - margin, y: height - 42 },
-      thickness: 0.8,
-      color: rgb(241 / 255, 245 / 255, 249 / 255),
-    });
+    if (!shouldHideTurnitinHeaderDivider(pageNum, mode)) {
+      page.drawLine({
+        start: { x: margin, y: height - 42 },
+        end: { x: width - margin, y: height - 42 },
+        thickness: 0.8,
+        color: rgb(241 / 255, 245 / 255, 249 / 255),
+      });
+    }
 
     // --- OFFICIAL TURNITIN RUNNING FOOTER (SAME AS COVER PAGES) ---
     if (embeddedLogo) {
