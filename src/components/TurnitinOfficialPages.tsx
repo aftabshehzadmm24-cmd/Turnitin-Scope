@@ -129,7 +129,14 @@ export const TurnitinPageHeader: React.FC<{
   totalPages: number;
   sectionTitle: string;
   submissionId: string;
-}> = ({ pageNumber, totalPages, sectionTitle, submissionId }) => {
+  mode?: 'ai' | 'similarity';
+}> = ({ pageNumber, totalPages, sectionTitle, submissionId, mode }) => {
+  const shouldHideHeader = mode
+    ? (mode === 'ai' ? pageNumber >= 3 : pageNumber >= 4)
+    : false;
+
+  if (shouldHideHeader) return null;
+
   return (
     <div className="flex items-center justify-between text-[11px] text-slate-700 font-sans border-b border-slate-100 pb-2.5 mb-6 px-1 shrink-0 select-text">
       <div className="flex items-center gap-6">
@@ -153,7 +160,14 @@ export const TurnitinPageFooter: React.FC<{
   totalPages: number;
   sectionTitle: string;
   submissionId: string;
-}> = ({ pageNumber, totalPages, sectionTitle, submissionId }) => {
+  mode?: 'ai' | 'similarity';
+}> = ({ pageNumber, totalPages, sectionTitle, submissionId, mode }) => {
+  const shouldHideFooter = mode
+    ? (mode === 'ai' ? pageNumber >= 3 : pageNumber >= 4)
+    : false;
+
+  if (shouldHideFooter) return null;
+
   return (
     <div className="flex items-center justify-between text-[11px] text-slate-700 font-sans pt-2.5 mt-6 px-1 shrink-0 select-text">
       <div className="flex items-center gap-6">
@@ -199,6 +213,7 @@ export const TurnitinCoverPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="Cover Page"
         submissionId={submissionId}
+        mode={mode}
       />
 
       <div className="mt-auto mb-10 pt-36 sm:pt-44 max-w-2xl w-full">
@@ -291,6 +306,7 @@ export const TurnitinCoverPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="Cover Page"
         submissionId={submissionId}
+        mode={mode}
       />
     </div>
   );
@@ -316,6 +332,7 @@ export const TurnitinAIOverviewPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="AI Writing Overview"
         submissionId={submissionId}
+        mode="ai"
       />
 
       <div className="mt-8 mb-auto space-y-6 max-w-4xl w-full">
@@ -404,6 +421,7 @@ export const TurnitinAIOverviewPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="AI Writing Overview"
         submissionId={submissionId}
+        mode="ai"
       />
     </div>
   );
@@ -439,6 +457,7 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="Integrity Overview"
         submissionId={submissionId}
+        mode="similarity"
       />
 
       <div className="mt-2 mb-auto space-y-4 max-w-3xl w-full">
@@ -618,6 +637,7 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="Integrity Overview"
         submissionId={submissionId}
+        mode="similarity"
       />
     </div>
   );
@@ -695,6 +715,7 @@ export const TurnitinTopSourcesPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="Integrity Overview"
         submissionId={submissionId}
+        mode="similarity"
       />
 
       <div className="flex-1 pt-3 pb-2 flex flex-col justify-start">
@@ -932,6 +953,7 @@ export const TurnitinTopSourcesPage: React.FC<{
         totalPages={totalPages}
         sectionTitle="Integrity Overview"
         submissionId={submissionId}
+        mode="similarity"
       />
     </div>
   );

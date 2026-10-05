@@ -149,7 +149,7 @@ export const AuthenticPdfManuscriptPage: React.FC<AuthenticPdfManuscriptPageProp
 			className="turnitin-authentic-pdf-page relative flex h-full min-h-[960px] w-full flex-col justify-between bg-white p-6 font-sans text-slate-900 sm:p-10"
 			style={{ boxSizing: 'border-box' }}
 		>
-			<TurnitinPageHeader pageNumber={pageNumber} totalPages={totalPages} sectionTitle={sectionTitle} submissionId={submissionId} />
+			<TurnitinPageHeader pageNumber={pageNumber} totalPages={totalPages} sectionTitle={sectionTitle} submissionId={submissionId} mode={mode} />
 
 			<div ref={containerRef} className="relative my-4 flex flex-1 items-center justify-center overflow-hidden bg-white py-2">
 				{loading && (
@@ -231,7 +231,7 @@ export const AuthenticPdfManuscriptPage: React.FC<AuthenticPdfManuscriptPageProp
 				</div>
 			</div>
 
-			<TurnitinPageFooter pageNumber={pageNumber} totalPages={totalPages} sectionTitle={sectionTitle} submissionId={submissionId} />
+			<TurnitinPageFooter pageNumber={pageNumber} totalPages={totalPages} sectionTitle={sectionTitle} submissionId={submissionId} mode={mode} />
 		</div>
 	);
 };

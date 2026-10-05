@@ -451,6 +451,7 @@ export const DynamicTurnitinManuscriptPage: React.FC<{
         totalPages={totalPages}
         sectionTitle={sectionTitle}
         submissionId={submissionId}
+        mode={mode}
       />
 
       <div className="flex-1 my-auto text-[12.5px] leading-relaxed relative pt-4 pb-4">
@@ -588,6 +589,7 @@ export const DynamicTurnitinManuscriptPage: React.FC<{
         totalPages={totalPages}
         sectionTitle={sectionTitle}
         submissionId={submissionId}
+        mode={mode}
       />
     </div>
   );
