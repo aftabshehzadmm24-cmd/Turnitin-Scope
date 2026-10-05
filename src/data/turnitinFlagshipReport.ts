@@ -40,7 +40,7 @@ export const TURNITIN_FLAGSHIP_REPORT: ScanReport = {
   fileName: 'Quantitative Practical Proforma 2026 final 1-1-compressed.pdf',
   fileSize: '248.9 KB',
   author: 'A B',
-  institution: 'Allama Iqbal Open University',
+  institution: 'Zhōngguó Kēxué Jìshù Dàxué',
   type: 'Both',
   status: 'Completed',
   plagiarismScore: 16,

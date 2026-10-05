@@ -54,7 +54,7 @@ export const KUNAL_REPORT: ScanReport = {
   fileName: 'Kunal Kumar - AI Developer.pdf',
   fileSize: '1.8 MB',
   author: 'Kunal Maheshwari',
-  institution: 'Allama Iqbal Open University',
+  institution: 'Zhōngguó Kēxué Jìshù Dàxué',
   type: 'Plagiarism Check',
   status: 'Completed',
   plagiarismScore: 3, // 3% Overall Similarity matching user specification

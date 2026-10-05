@@ -209,7 +209,7 @@ export const TurnitinCoverPage: React.FC<{
         .join(' ')
     : 'A B';
 
-  const institution = report.institution || 'Allama Iqbal Open University';
+  const institution = report.institution || 'Zhōngguó Kēxué Jìshù Dàxué';
   const subDate = report.submissionDate || report.date || 'Sep 12, 2026, 3:50 PM GMT';
   const dlDate = report.downloadDate || 'Sep 12, 2026, 3:51 PM GMT';
   const manuscriptPages =

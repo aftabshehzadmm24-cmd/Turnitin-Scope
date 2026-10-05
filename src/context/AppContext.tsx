@@ -2451,7 +2451,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sources: sourcesList,
         contentSample: sampleText,
         snippets: generatedSnippets,
-        institution: options.institution || 'Allama Iqbal Open University',
+        institution: options.institution || 'Zhōngguó Kēxué Jìshù Dàxué',
         submissionDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }),
         downloadDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }),
         pageCount: calculatedPageCount,

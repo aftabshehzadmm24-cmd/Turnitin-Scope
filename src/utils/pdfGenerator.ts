@@ -2110,12 +2110,12 @@ export async function downloadReportPdf(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9.5);
     doc.setTextColor(71, 85, 105);
-    doc.text(report.institution || 'Allama Iqbal Open University', margin + 13, y);
+    doc.text(report.institution || 'Zhōngguó Kēxué Jìshù Dàxué', margin + 13, y);
   } else {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9.5);
     doc.setTextColor(71, 85, 105);
-    doc.text(report.institution || 'Allama Iqbal Open University', margin, y);
+    doc.text(report.institution || 'Zhōngguó Kēxué Jìshù Dàxué', margin, y);
   }
 
   // Thin Divider
