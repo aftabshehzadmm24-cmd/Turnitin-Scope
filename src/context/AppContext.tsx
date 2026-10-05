@@ -188,6 +188,8 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const ADMIN_PAGE_SIZE = 20;
 const ADMIN_ACTIVITY_PAGE_SIZE = 10;
 const ADMIN_PURCHASE_KEY_PAGE_SIZE = 10;
+const CLIENT_NOTIFICATION_LIMIT = 4;
+const CLIENT_ACTIVATION_CODE_PREVIEW_LIMIT = 10;
 
 const getUserScopedStorageKey = (key: string, userId?: string): string => {
   if (!userId) return key;
@@ -1067,31 +1069,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // 2. Live Activation Codes Collection Listener
       if (!isCurrentAdmin) {
         unsubCodes = onSnapshot(
-          collection(db, 'activation_codes'),
+          query(
+            collection(db, 'activation_codes'),
+            where('isActive', '==', true),
+            limit(CLIENT_ACTIVATION_CODE_PREVIEW_LIMIT)
+          ),
         (snapshot) => {
-          if (!snapshot.empty) {
-            const fsCodes: ActivationCode[] = [];
-            snapshot.forEach((docSnap) => {
-              const d = docSnap.data();
-              if (d && d.code) {
-                fsCodes.push({
-                  id: docSnap.id,
-                  code: d.code,
-                  credits: typeof d.credits === 'number' ? d.credits : 10,
-                  maxUses: typeof d.maxUses === 'number' ? d.maxUses : 100,
-                  usedCount: typeof d.usedCount === 'number' ? d.usedCount : 0,
-                  isActive: d.isActive !== undefined ? !!d.isActive : true,
-                  createdAt: d.createdAt || new Date().toISOString().split('T')[0],
-                  note: d.note || '',
-                  createdBy: d.createdBy || 'Admin',
-                });
-              }
-            });
-            setActivationCodes(fsCodes);
-            try {
-              localStorage.setItem(STORAGE_KEY_CODES, JSON.stringify(fsCodes));
-            } catch {}
-          }
+          const fsCodes: ActivationCode[] = [];
+          snapshot.forEach((docSnap) => {
+            const d = docSnap.data();
+            if (d && d.code) {
+              fsCodes.push({
+                id: docSnap.id,
+                code: d.code,
+                credits: typeof d.credits === 'number' ? d.credits : 10,
+                maxUses: typeof d.maxUses === 'number' ? d.maxUses : 100,
+                usedCount: typeof d.usedCount === 'number' ? d.usedCount : 0,
+                isActive: d.isActive !== undefined ? !!d.isActive : true,
+                createdAt: d.createdAt || new Date().toISOString().split('T')[0],
+                note: d.note || '',
+                createdBy: d.createdBy || 'Admin',
+              });
+            }
+          });
+          setActivationCodes(fsCodes);
+          try {
+            localStorage.setItem(STORAGE_KEY_CODES, JSON.stringify(fsCodes));
+          } catch {}
         },
         (err) => {
           console.warn('Live activation codes subscription notice:', err.message);
@@ -1106,7 +1110,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : query(
             collection(db, 'transactions'),
             where('userId', '==', firebaseUser.uid),
-            limit(ADMIN_PAGE_SIZE)
+            orderBy('timestamp', 'desc'),
+            limit(CLIENT_NOTIFICATION_LIMIT)
           );
 
       unsubTxns = onSnapshot(
@@ -1391,7 +1396,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : query(
               collection(db, 'transactions'),
               where('userId', '==', firebaseUser.uid),
-              limit(ADMIN_PAGE_SIZE)
+              orderBy('timestamp', 'desc'),
+              limit(CLIENT_NOTIFICATION_LIMIT)
             );
 
         const txnsSnap = await safeGetDocs(txnsQuery, 3500);
@@ -2158,14 +2164,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Enter an activation code.' };
     }
 
-    const activationCode = activationCodes.find(
+    const cachedActivationCode = activationCodes.find(
       item => item.code.trim().toUpperCase() === normalizedCode
     );
-    if (!activationCode) {
+    let activationCodeId = cachedActivationCode?.id;
+    if (!activationCodeId) {
+      const matchingCodes = await safeGetDocs(query(
+        collection(db, 'activation_codes'),
+        where('code', '==', normalizedCode),
+        limit(1)
+      ));
+      if (!matchingCodes) {
+        return { success: false, message: 'Could not verify the activation code. Please try again.' };
+      }
+      activationCodeId = matchingCodes.docs[0]?.id;
+    }
+    if (!activationCodeId) {
       return { success: false, message: 'Activation code not found. Check the code and try again.' };
     }
 
-    const codeRef = doc(db, 'activation_codes', activationCode.id);
+    const codeRef = doc(db, 'activation_codes', activationCodeId);
     const userRef = doc(db, 'users', firebaseUser.uid);
     const transactionRef = doc(collection(db, 'transactions'));
     const now = Date.now();
@@ -2226,7 +2244,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setUsers(previous => previous.map(user => user.id === firebaseUser.uid
         ? { ...user, credits: result.balanceAfter }
         : user));
-      setActivationCodes(previous => previous.map(item => item.id === activationCode.id
+      setActivationCodes(previous => previous.map(item => item.id === activationCodeId
         ? { ...item, usedCount: result.usedCount, isActive: result.isActive }
         : item));
       setTransactions(previous => [{
