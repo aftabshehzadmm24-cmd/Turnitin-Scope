@@ -131,14 +131,16 @@ export const TurnitinPageHeader: React.FC<{
   submissionId: string;
   mode?: 'ai' | 'similarity';
 }> = ({ pageNumber, totalPages, sectionTitle, submissionId, mode }) => {
-  const shouldHideHeader = mode
+  const hideDivider = mode
     ? (mode === 'ai' ? pageNumber >= 3 : pageNumber >= 4)
     : false;
 
-  if (shouldHideHeader) return null;
-
   return (
-    <div className="flex items-center justify-between text-[11px] text-slate-700 font-sans border-b border-slate-100 pb-2.5 mb-6 px-1 shrink-0 select-text">
+    <div
+      className={`flex items-center justify-between text-[11px] text-slate-700 font-sans px-1 shrink-0 select-text ${
+        hideDivider ? 'border-b-0 pb-0 mb-0' : 'border-b border-slate-100 pb-2.5 mb-6'
+      }`}
+    >
       <div className="flex items-center gap-6">
         <TurnitinLogoWithText size="sm" />
         <span className="text-slate-600 font-medium">
@@ -162,14 +164,16 @@ export const TurnitinPageFooter: React.FC<{
   submissionId: string;
   mode?: 'ai' | 'similarity';
 }> = ({ pageNumber, totalPages, sectionTitle, submissionId, mode }) => {
-  const shouldHideFooter = mode
+  const hideDivider = mode
     ? (mode === 'ai' ? pageNumber >= 3 : pageNumber >= 4)
     : false;
 
-  if (shouldHideFooter) return null;
-
   return (
-    <div className="flex items-center justify-between text-[11px] text-slate-700 font-sans pt-2.5 mt-6 px-1 shrink-0 select-text">
+    <div
+      className={`flex items-center justify-between text-[11px] text-slate-700 font-sans px-1 shrink-0 select-text ${
+        hideDivider ? 'pt-0 mt-0' : 'pt-2.5 mt-6'
+      }`}
+    >
       <div className="flex items-center gap-6">
         <TurnitinLogoWithText size="sm" />
         <span className="text-slate-600 font-medium">
