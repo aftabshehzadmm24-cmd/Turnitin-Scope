@@ -20,7 +20,22 @@ import {
   FirebaseUser,
   ADMIN_EMAIL,
 } from '../lib/firebase';
-import { doc, collection, deleteDoc, onSnapshot, query, runTransaction, setDoc, where } from 'firebase/firestore';
+import {
+  doc,
+  collection,
+  deleteDoc,
+  documentId,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  runTransaction,
+  setDoc,
+  startAfter,
+  where,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+} from 'firebase/firestore';
 import { buildUserFromAuthProfile } from '../lib/userProfiles';
 import { deleteReportFile, getReportFile, pruneExpiredReportFiles, saveReportFile } from '../utils/reportFileStore';
 
@@ -128,6 +143,12 @@ interface AppContextType {
   }) => Promise<boolean>;
   updateUserAsAdmin: (userId: string, updates: Partial<User>) => Promise<boolean>;
   refreshFromFirestore: () => Promise<void>;
+  loadMoreAdminUsers: () => Promise<void>;
+  loadMoreTransactions: () => Promise<void>;
+  hasMoreAdminUsers: boolean;
+  hasMoreTransactions: boolean;
+  isLoadingMoreAdminUsers: boolean;
+  isLoadingMoreTransactions: boolean;
   isFirestoreSyncing: boolean;
   resetAllData: () => void;
   setIsSidebarOpen: (open: boolean | ((prev: boolean) => boolean)) => void;
@@ -140,6 +161,7 @@ const STORAGE_KEY_REPORTS = 'turnitscope_reports_v1';
 const STORAGE_KEY_CODES = 'turnitscope_codes_v1';
 const STORAGE_KEY_TXNS = 'turnitscope_txns_v1';
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const ADMIN_PAGE_SIZE = 20;
 
 const getUserScopedStorageKey = (key: string, userId?: string): string => {
   if (!userId) return key;
@@ -532,6 +554,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ];
     }
   });
+  const [hasMoreAdminUsers, setHasMoreAdminUsers] = useState(false);
+  const [hasMoreTransactions, setHasMoreTransactions] = useState(false);
+  const [isLoadingMoreAdminUsers, setIsLoadingMoreAdminUsers] = useState(false);
+  const [isLoadingMoreTransactions, setIsLoadingMoreTransactions] = useState(false);
+  const adminUsersCursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const transactionsCursorRef = useRef<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const profileSnapshotsRef = useRef(new Map<string, Promise<any>>());
+  const getProfileSnapshot = (userId: string) => {
+    const existing = profileSnapshotsRef.current.get(userId);
+    if (existing) return existing;
+    const pending = safeGetDoc(doc(db, 'users', userId), 3500).then(snapshot => {
+      if (!snapshot) profileSnapshotsRef.current.delete(userId);
+      return snapshot;
+    });
+    profileSnapshotsRef.current.set(userId, pending);
+    return pending;
+  };
 
   // Firebase Auth states
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
@@ -560,45 +599,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   const toggleSidebar = () => setIsSidebarOpen(prev => !prev);
-
-  const syncUsersFromFirestoreIfPossible = async () => {
-    try {
-      const usersSnap = await safeGetDocs(collection(db, 'users'), 3500);
-      if (!usersSnap || usersSnap.empty) return;
-
-      const fsUsers: User[] = [];
-      usersSnap.forEach((docSnap: any) => {
-        const d = docSnap.data();
-        if (d && (d.email || d.name) && !isRemovedUser(d)) {
-          fsUsers.push({
-            id: docSnap.id,
-            name: d.name || (d.email ? d.email.split('@')[0] : 'Academic User'),
-            email: d.email || '',
-            role: isAdminEmail(d.email) ? 'admin' : (d.role || 'client'),
-            credits: typeof d.credits === 'number' ? d.credits : 0,
-            planName: d.planName || 'Standard Verified Plan',
-            planExpiry: d.planExpiry || '2027-12-31',
-            totalScans: typeof d.totalScans === 'number' ? d.totalScans : 0,
-            createdAt: d.createdAt || new Date().toISOString().split('T')[0],
-            emailVerified: !!d.emailVerified,
-            photoURL: d.photoURL || null,
-            authProvider: d.authProvider || 'password',
-          });
-        }
-      });
-
-      if (!fsUsers.some(u => u.email.toLowerCase() === ADMIN_EMAIL)) {
-        fsUsers.unshift(ADMIN_USER_INITIAL);
-      }
-
-      setUsers(fsUsers);
-      try {
-        localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(fsUsers));
-      } catch {}
-    } catch {
-      // Ignore permission/offline cases; the in-memory user list is already updated.
-    }
-  };
 
   // Sync to local storage with safe quota handling
   useEffect(() => {
@@ -796,7 +796,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
       error => console.warn('Purchase key listener notice:', error.message)
     );
-  }, [firebaseUser, currentUser.email]);
+  }, [firebaseUser]);
 
   // Listen to Firebase Auth state & active institutional session
   useEffect(() => {
@@ -806,7 +806,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setFirebaseUser(fbUser);
         const userDocRef = doc(db, 'users', fbUser.uid);
         try {
-          const userDocSnap = await safeGetDoc(userDocRef, 3500);
+          const userDocSnap = await getProfileSnapshot(fbUser.uid);
           if (!userDocSnap) {
             throw new Error('Could not load your profile from Firestore. Skipping profile creation.');
           }
@@ -871,35 +871,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           }
 
-          // If current user is admin, fetch all registered users from Firestore for directory
-          if (isAdminEmail(fbUser.email)) {
-            setActivePanel('admin');
-            try {
-              const usersSnap = await safeGetDocs(collection(db, 'users'), 3500);
-              if (usersSnap && !usersSnap.empty) {
-                const fsUsers: User[] = [];
-                usersSnap.forEach((d: any) => {
-                  const uData = d.data() as User;
-                  if (uData && uData.email && !isRemovedUser(uData)) {
-                    fsUsers.push({
-                      ...uData,
-                      role: isAdminEmail(uData.email) ? 'admin' : 'client',
-                      credits: isAdminEmail(uData.email) ? 0 : (uData.credits ?? 0),
-                      usedCredits: isAdminEmail(uData.email) ? 0 : (uData.usedCredits ?? 0),
-                    });
-                  }
-                });
-                setUsers(prev => {
-                  const map = new Map<string, User>();
-                  prev.forEach(u => map.set(u.email.toLowerCase(), u));
-                  fsUsers.forEach(u => map.set(u.email.toLowerCase(), u));
-                  return Array.from(map.values());
-                });
-              }
-            } catch (err) {
-              console.warn('Operating in offline mode or cached directory:', err);
-            }
-          }
+          if (isAdminEmail(fbUser.email)) setActivePanel('admin');
         } catch (e) {
           console.warn('Operating in offline mode with cached profile:', e);
           // Fallback to local profile with Firebase user info
@@ -925,6 +897,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       } else {
         setFirebaseUser(null);
+        profileSnapshotsRef.current.clear();
         setCurrentUser(INITIAL_CURRENT_USER);
         setActivePanel('client');
       }
@@ -946,7 +919,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    const isCurrentAdmin = isAdminEmail(firebaseUser.email || currentUser.email) || currentUser.role === 'admin';
+    const isCurrentAdmin = isAdminEmail(firebaseUser.email);
 
     try {
       const userReportsQuery = query(
@@ -1050,9 +1023,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // 1. Live Users Collection Listener - strictly for administrators per security rules
       if (isCurrentAdmin) {
-        unsubUsers = onSnapshot(
+        const usersQuery = query(
           collection(db, 'users'),
+          orderBy(documentId()),
+          limit(ADMIN_PAGE_SIZE)
+        );
+        unsubUsers = onSnapshot(
+          usersQuery,
           (snapshot) => {
+            if (!adminUsersCursorRef.current && snapshot.docs.length > 0) {
+              adminUsersCursorRef.current = snapshot.docs[snapshot.docs.length - 1];
+            }
+            setHasMoreAdminUsers(snapshot.docs.length === ADMIN_PAGE_SIZE);
             if (!snapshot.empty) {
               const fsUsers: User[] = [];
               snapshot.forEach((docSnap) => {
@@ -1080,7 +1062,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 fsUsers.unshift(ADMIN_USER_INITIAL);
               }
 
-              setUsers(fsUsers);
+              setUsers(previous => {
+                const byId = new Map(previous.map(user => [user.id, user]));
+                fsUsers.forEach(user => byId.set(user.id, { ...byId.get(user.id), ...user }));
+                return Array.from(byId.values());
+              });
               try {
                 localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(fsUsers));
               } catch {}
@@ -1128,12 +1114,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // 3. Live Transactions Collection Listener
       // Admins listen to all transactions; individual users query only their own transactions
       const txnsQuery = isCurrentAdmin
-        ? collection(db, 'transactions')
-        : query(collection(db, 'transactions'), where('userId', '==', firebaseUser.uid));
+        ? query(collection(db, 'transactions'), orderBy('timestamp', 'desc'), limit(ADMIN_PAGE_SIZE))
+        : query(
+            collection(db, 'transactions'),
+            where('userId', '==', firebaseUser.uid),
+            limit(ADMIN_PAGE_SIZE)
+          );
 
       unsubTxns = onSnapshot(
         txnsQuery,
         (snapshot) => {
+          if (isCurrentAdmin) {
+            if (!transactionsCursorRef.current && snapshot.docs.length > 0) {
+              transactionsCursorRef.current = snapshot.docs[snapshot.docs.length - 1];
+            }
+            setHasMoreTransactions(snapshot.docs.length === ADMIN_PAGE_SIZE);
+          }
           if (!snapshot.empty) {
             const fsTxns: CreditTransaction[] = [];
             snapshot.forEach((docSnap) => {
@@ -1153,7 +1149,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               }
             });
             fsTxns.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-            setTransactions(fsTxns);
+            setTransactions(previous => {
+              const byId = new Map(previous.map(transaction => [transaction.id, transaction]));
+              fsTxns.forEach(transaction => byId.set(transaction.id, transaction));
+              return Array.from(byId.values()).sort((a, b) => b.timestamp - a.timestamp);
+            });
             try {
               localStorage.setItem(STORAGE_KEY_TXNS, JSON.stringify(fsTxns));
             } catch {}
@@ -1172,15 +1172,131 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (unsubCodes) unsubCodes();
       if (unsubTxns) unsubTxns();
       if (unsubReports) unsubReports();
+      adminUsersCursorRef.current = null;
+      transactionsCursorRef.current = null;
+      setHasMoreAdminUsers(false);
+      setHasMoreTransactions(false);
     };
-  }, [firebaseUser, currentUser.email, currentUser.role]);
+  }, [firebaseUser]);
+
+  const loadMoreAdminUsers = async () => {
+    const cursor = adminUsersCursorRef.current;
+    if (!firebaseUser || !isAdminEmail(firebaseUser.email) || !cursor || isLoadingMoreAdminUsers) return;
+    setIsLoadingMoreAdminUsers(true);
+    try {
+      const snapshot = await safeGetDocs(query(
+        collection(db, 'users'),
+        orderBy(documentId()),
+        startAfter(cursor),
+        limit(ADMIN_PAGE_SIZE)
+      ));
+      if (!snapshot) {
+        setNotification({ message: 'Could not load more users. Please try again.', type: 'error' });
+        return;
+      }
+      if (snapshot.docs.length > 0) {
+        adminUsersCursorRef.current = snapshot.docs[snapshot.docs.length - 1];
+        const nextUsers: User[] = snapshot.docs
+          .map((docSnap: QueryDocumentSnapshot<DocumentData>) => {
+            const data = docSnap.data();
+            if ((!data.email && !data.name) || isRemovedUser(data)) return null;
+            return {
+              id: docSnap.id,
+              name: data.name || data.email?.split('@')[0] || 'Academic User',
+              email: data.email || '',
+              role: isAdminEmail(data.email) ? 'admin' : (data.role || 'client'),
+              credits: isAdminEmail(data.email) ? 0 : (typeof data.credits === 'number' ? data.credits : 0),
+              usedCredits: isAdminEmail(data.email) ? 0 : (typeof data.usedCredits === 'number' ? data.usedCredits : 0),
+              planName: data.planName || 'Standard Verified Plan',
+              planExpiry: data.planExpiry || '2027-12-31',
+              totalScans: typeof data.totalScans === 'number' ? data.totalScans : 0,
+              createdAt: data.createdAt || new Date().toISOString().split('T')[0],
+              emailVerified: !!data.emailVerified,
+              photoURL: data.photoURL || null,
+              authProvider: data.authProvider || 'password',
+            } satisfies User;
+          })
+          .filter((user: User | null): user is User => user !== null);
+        setUsers(previous => {
+          const byId = new Map(previous.map(user => [user.id, user]));
+          nextUsers.forEach(user => byId.set(user.id, { ...byId.get(user.id), ...user }));
+          return Array.from(byId.values());
+        });
+      }
+      setHasMoreAdminUsers(snapshot.docs.length === ADMIN_PAGE_SIZE);
+    } catch (error) {
+      console.error('Could not load the next admin user page:', error);
+      setNotification({ message: 'Could not load more users. Please try again.', type: 'error' });
+    } finally {
+      setIsLoadingMoreAdminUsers(false);
+    }
+  };
+
+  const loadMoreTransactions = async () => {
+    const cursor = transactionsCursorRef.current;
+    if (!firebaseUser || !isAdminEmail(firebaseUser.email) || !cursor || isLoadingMoreTransactions) return;
+    setIsLoadingMoreTransactions(true);
+    try {
+      const snapshot = await safeGetDocs(query(
+        collection(db, 'transactions'),
+        orderBy('timestamp', 'desc'),
+        startAfter(cursor),
+        limit(ADMIN_PAGE_SIZE)
+      ));
+      if (!snapshot) {
+        setNotification({ message: 'Could not load older transactions. Please try again.', type: 'error' });
+        return;
+      }
+      if (snapshot.docs.length > 0) {
+        transactionsCursorRef.current = snapshot.docs[snapshot.docs.length - 1];
+        const nextTransactions: CreditTransaction[] = snapshot.docs
+          .map((docSnap: QueryDocumentSnapshot<DocumentData>) => {
+            const data = docSnap.data();
+            if (!data.userId) return null;
+            return {
+              id: docSnap.id,
+              userId: data.userId,
+              userName: data.userName || 'User',
+              amount: typeof data.amount === 'number' ? data.amount : 0,
+              balanceAfter: typeof data.balanceAfter === 'number' ? data.balanceAfter : 0,
+              type: data.type || 'admin_grant',
+              note: data.note || '',
+              date: data.date || formatPakistanDateTime(Date.now()),
+              timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now(),
+            } satisfies CreditTransaction;
+          })
+          .filter((transaction: CreditTransaction | null): transaction is CreditTransaction => transaction !== null);
+        setTransactions(previous => {
+          const byId = new Map(previous.map(transaction => [transaction.id, transaction]));
+          nextTransactions.forEach(transaction => byId.set(transaction.id, transaction));
+          return Array.from(byId.values()).sort((a, b) => b.timestamp - a.timestamp);
+        });
+      }
+      setHasMoreTransactions(snapshot.docs.length === ADMIN_PAGE_SIZE);
+    } catch (error) {
+      console.error('Could not load the next transaction page:', error);
+      setNotification({ message: 'Could not load more transactions. Please try again.', type: 'error' });
+    } finally {
+      setIsLoadingMoreTransactions(false);
+    }
+  };
 
   const refreshFromFirestore = async () => {
     setIsFirestoreSyncing(true);
     const isCurrentAdmin = isAdminEmail(currentUser.email) || currentUser.role === 'admin';
     try {
       if (isCurrentAdmin) {
-        const usersSnap = await safeGetDocs(collection(db, 'users'), 3500);
+        const usersSnap = await safeGetDocs(query(
+          collection(db, 'users'),
+          orderBy(documentId()),
+          limit(ADMIN_PAGE_SIZE)
+        ), 3500);
+        if (usersSnap) {
+          adminUsersCursorRef.current = usersSnap.docs.length > 0
+            ? usersSnap.docs[usersSnap.docs.length - 1]
+            : null;
+          setHasMoreAdminUsers(usersSnap.docs.length === ADMIN_PAGE_SIZE);
+        }
         if (usersSnap && !usersSnap.empty) {
           const fsUsers: User[] = [];
           usersSnap.forEach((docSnap: any) => {
@@ -1206,7 +1322,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (!fsUsers.some(u => u.email.toLowerCase() === ADMIN_EMAIL)) {
             fsUsers.unshift(ADMIN_USER_INITIAL);
           }
-          setUsers(fsUsers);
+          setUsers(previous => {
+            const byId = new Map(previous.map(user => [user.id, user]));
+            fsUsers.forEach(user => byId.set(user.id, { ...byId.get(user.id), ...user }));
+            return Array.from(byId.values());
+          });
           try {
             localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(fsUsers));
           } catch {}
@@ -1240,10 +1360,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         const txnsQuery = isCurrentAdmin
-          ? collection(db, 'transactions')
-          : query(collection(db, 'transactions'), where('userId', '==', firebaseUser.uid));
+          ? query(collection(db, 'transactions'), orderBy('timestamp', 'desc'), limit(ADMIN_PAGE_SIZE))
+          : query(
+              collection(db, 'transactions'),
+              where('userId', '==', firebaseUser.uid),
+              limit(ADMIN_PAGE_SIZE)
+            );
 
         const txnsSnap = await safeGetDocs(txnsQuery, 3500);
+        if (isCurrentAdmin && txnsSnap) {
+          transactionsCursorRef.current = txnsSnap.docs.length > 0
+            ? txnsSnap.docs[txnsSnap.docs.length - 1]
+            : null;
+          setHasMoreTransactions(txnsSnap.docs.length === ADMIN_PAGE_SIZE);
+        }
         if (txnsSnap && !txnsSnap.empty) {
           const fsTxns: CreditTransaction[] = [];
           txnsSnap.forEach((docSnap: any) => {
@@ -1263,7 +1393,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           });
           fsTxns.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-          setTransactions(fsTxns);
+          setTransactions(previous => {
+            const byId = new Map(previous.map(transaction => [transaction.id, transaction]));
+            fsTxns.forEach(transaction => byId.set(transaction.id, transaction));
+            return Array.from(byId.values()).sort((a, b) => b.timestamp - a.timestamp);
+          });
           try {
             localStorage.setItem(STORAGE_KEY_TXNS, JSON.stringify(fsTxns));
           } catch {}
@@ -1295,7 +1429,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         })),
       };
       const profileRef = doc(db, 'users', result.user.uid);
-      const profileSnapshot = await safeGetDoc(profileRef);
+      const profileSnapshot = await getProfileSnapshot(result.user.uid);
       if (!profileSnapshot) {
         throw new Error('Could not load your profile from Firestore. Please retry signing in.');
       }
@@ -1326,7 +1460,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (newUser.email) {
         await setDoc(profileRef, newUser, { merge: true });
       }
-      await syncUsersFromFirestoreIfPossible();
       setActivePanel(newUser.role === 'admin' ? 'admin' : 'client');
       setNotification({
         message: `Welcome, ${newUser.name || newUser.email}! Signed in with Google.`,
@@ -1401,7 +1534,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setFirebaseUser(result.user);
       const cleanEmail = result.user.email?.toLowerCase() || email.trim().toLowerCase();
       const isDefaultAdmin = isAdminEmail(cleanEmail);
-      const profileSnapshot = await safeGetDoc(doc(db, 'users', result.user.uid));
+      const profileSnapshot = await getProfileSnapshot(result.user.uid);
       const firestoreUser = profileSnapshot?.exists?.() ? profileSnapshot.data() as User : undefined;
       const existingUser = firestoreUser || users.find(u => u.email.toLowerCase() === cleanEmail);
       if (existingUser) {
@@ -2532,6 +2665,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addUserAsAdmin,
         updateUserAsAdmin,
         refreshFromFirestore,
+        loadMoreAdminUsers,
+        loadMoreTransactions,
+        hasMoreAdminUsers,
+        hasMoreTransactions,
+        isLoadingMoreAdminUsers,
+        isLoadingMoreTransactions,
         isFirestoreSyncing,
         resetAllData,
         isSidebarOpen,

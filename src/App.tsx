@@ -176,7 +176,7 @@ const AppContent: React.FC = () => {
             {/* View Content */}
             <main className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl w-full mx-auto">
               {activeTab === 'dashboard' && (
-                <DashboardView onOpenReport={(rep: ScanReport) => setSelectedReport(rep)} />
+                <DashboardView />
               )}
               {activeTab === 'reports' && (
                 <ReportsView onOpenReport={(rep: ScanReport) => setSelectedReport(rep)} />

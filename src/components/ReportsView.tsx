@@ -21,7 +21,7 @@ interface ReportsViewProps {
 }
 
 export const ReportsView: React.FC<ReportsViewProps> = ({ onOpenReport }) => {
-  const { reports, deleteReport } = useApp();
+  const { reports, deleteReport, setNotification } = useApp();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>('All Status');
   const [selectedType, setSelectedType] = useState<string>('All Types');
@@ -29,12 +29,18 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onOpenReport }) => {
   const [activeDownloadMenu, setActiveDownloadMenu] = useState<string | null>(null);
 
   const handleDownload = async (rep: ScanReport, mode: 'similarity' | 'ai') => {
+    if (rep.status !== 'Completed') return;
     try {
       setDownloadingId(`${rep.id}-${mode}`);
       setActiveDownloadMenu(null);
       await downloadReportPdf(rep, mode);
+      setNotification({ message: 'Report PDF downloaded successfully.', type: 'success' });
     } catch (err) {
       console.error('PDF download error:', err);
+      setNotification({
+        message: 'Could not generate the report PDF. Please try again.',
+        type: 'error',
+      });
     } finally {
       setDownloadingId(null);
     }
@@ -133,6 +139,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onOpenReport }) => {
                 {filteredReports.map(rep => {
                   const canDownloadSimilarity = rep.type === 'Plagiarism Check' || rep.type === 'Both';
                   const canDownloadAi = rep.type === 'AI Detection' || rep.type === 'Both';
+                  const canDownload = rep.status === 'Completed';
 
                   return (
                     <tr key={rep.id} className="hover:bg-slate-50/60 transition group">
@@ -202,13 +209,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({ onOpenReport }) => {
                           {/* Download Menu Trigger */}
                           <div className="relative">
                             <button
+                              type="button"
                               onClick={() =>
-                                setActiveDownloadMenu(
-                                  activeDownloadMenu === rep.id ? null : rep.id
-                                )
+                                canDownload &&
+                                setActiveDownloadMenu(activeDownloadMenu === rep.id ? null : rep.id)
                               }
-                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
-                              title="Download PDF report options"
+                              disabled={!canDownload || downloadingId?.startsWith(rep.id)}
+                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
+                              title={canDownload ? 'Download PDF report options' : 'Available after report processing completes'}
                             >
                               {downloadingId && downloadingId.startsWith(rep.id) ? (
                                 <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />

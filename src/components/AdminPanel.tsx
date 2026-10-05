@@ -64,6 +64,12 @@ export const AdminPanel: React.FC = () => {
     updateUserAsAdmin,
     deleteUser,
     refreshFromFirestore,
+    loadMoreAdminUsers,
+    loadMoreTransactions,
+    hasMoreAdminUsers,
+    hasMoreTransactions,
+    isLoadingMoreAdminUsers,
+    isLoadingMoreTransactions,
     isFirestoreSyncing,
     signOutAuth,
     resetAllData,
@@ -248,7 +254,7 @@ export const AdminPanel: React.FC = () => {
               {totalCreditsInCirculation}
             </div>
             <div className="text-[11px] text-amber-400/80 mt-1">
-              Across {clientUsers.length} registered clients
+              Totals include the {clientUsers.length} loaded clients
             </div>
           </div>
 
@@ -274,7 +280,7 @@ export const AdminPanel: React.FC = () => {
               {clientUsers.length}
             </div>
             <div className="text-[11px] text-indigo-400/80 mt-1">
-              Active student & lab accounts
+              Loaded student & lab accounts
             </div>
           </div>
 
@@ -472,8 +478,18 @@ export const AdminPanel: React.FC = () => {
 
               <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
                 <span className="text-xs text-slate-400">
-                  {filteredUsers.length} total users
+                  {filteredUsers.length} loaded users
                 </span>
+                {hasMoreAdminUsers && (
+                  <button
+                    type="button"
+                    onClick={() => void loadMoreAdminUsers()}
+                    disabled={isLoadingMoreAdminUsers}
+                    className="rounded-xl border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+                  >
+                    {isLoadingMoreAdminUsers ? 'Loading...' : 'Load 20 more'}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -827,7 +843,7 @@ export const AdminPanel: React.FC = () => {
                 Credit Audit & Deduction Logs
               </span>
               <span className="text-xs text-slate-400">
-                Live ledger of all transactions
+                Latest {transactions.length} loaded transactions
               </span>
             </div>
 
@@ -883,6 +899,18 @@ export const AdminPanel: React.FC = () => {
                 </tbody>
               </table>
             </div>
+            {hasMoreTransactions && (
+              <div className="flex justify-center border-t border-slate-700 p-4">
+                <button
+                  type="button"
+                  onClick={() => void loadMoreTransactions()}
+                  disabled={isLoadingMoreTransactions}
+                  className="rounded-xl border border-slate-600 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+                >
+                  {isLoadingMoreTransactions ? 'Loading...' : 'Load 20 older transactions'}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </main>

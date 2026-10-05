@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { ScanMode, ScanReport } from '../types';
+import { ScanMode } from '../types';
 import { clampSimilarityScore, extractDocumentDataFromFile, ExtractedDocumentData } from '../utils/documentParser';
+import { downloadReportPdf } from '../utils/pdfGenerator';
 import {
   Bot,
   Search,
@@ -10,7 +11,6 @@ import {
   FileText,
   AlertTriangle,
   Sparkles,
-  ExternalLink,
   Plus,
   CheckCircle2,
   FileUp,
@@ -18,19 +18,17 @@ import {
   CreditCard,
   KeyRound,
   Loader2,
+  Download,
 } from 'lucide-react';
 
-interface DashboardViewProps {
-  onOpenReport: (report: ScanReport) => void;
-}
-
-export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenReport }) => {
+export const DashboardView: React.FC = () => {
   const {
     currentUser,
     reports,
     runScan,
     isScanning,
     setActiveTab,
+    setNotification,
   } = useApp();
 
   const [selectedMode, setSelectedMode] = useState<ScanMode>('both');
@@ -50,7 +48,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenReport }) =>
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isPreparingFile, setIsPreparingFile] = useState(false);
   const [preparingFileName, setPreparingFileName] = useState('');
+  const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDownloadReport = async (report: (typeof reports)[number]) => {
+    if (report.status !== 'Completed' || downloadingReportId) return;
+    setDownloadingReportId(report.id);
+    try {
+      const mode = report.type === 'AI Detection' ? 'ai' : 'similarity';
+      await downloadReportPdf(report, mode);
+      setNotification({ message: 'Report PDF downloaded successfully.', type: 'success' });
+    } catch (error) {
+      console.error('Report PDF download failed:', error);
+      setNotification({
+        message: 'Could not generate the report PDF. Please try again.',
+        type: 'error',
+      });
+    } finally {
+      setDownloadingReportId(null);
+    }
+  };
 
   const modeCosts: Record<ScanMode, number> = {
     ai: 2,
@@ -490,7 +507,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenReport }) =>
                   <th className="py-3 px-4">Plagiarism</th>
                   <th className="py-3 px-4">AI Score</th>
                   <th className="py-3 px-4">Date</th>
-                  <th className="py-3 px-5 text-right">View Report</th>
+                  <th className="py-3 px-5 text-right">Download Report</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -544,11 +561,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenReport }) =>
                     </td>
                     <td className="py-3.5 px-5 text-right whitespace-nowrap">
                       <button
-                        onClick={() => onOpenReport(rep)}
-                        className="text-indigo-600 hover:text-indigo-800 font-bold text-xs hover:underline inline-flex items-center gap-1"
+                        type="button"
+                        onClick={() => void handleDownloadReport(rep)}
+                        disabled={rep.status !== 'Completed' || downloadingReportId !== null}
+                        title={rep.status === 'Completed' ? 'Download generated report PDF' : 'Available after report processing completes'}
+                        className="text-indigo-600 hover:text-indigo-800 font-bold text-xs hover:underline inline-flex items-center gap-1 disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
                       >
-                        View
-                        <ExternalLink className="w-3 h-3" />
+                        {downloadingReportId === rep.id ? (
+                          <>
+                            Generating PDF
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          </>
+                        ) : rep.status === 'Completed' ? (
+                          <>
+                            Download
+                            <Download className="w-3 h-3" />
+                          </>
+                        ) : (
+                          'Processing'
+                        )}
                       </button>
                     </td>
                   </tr>
