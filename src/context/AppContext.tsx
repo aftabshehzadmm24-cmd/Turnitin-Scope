@@ -162,6 +162,7 @@ const STORAGE_KEY_CODES = 'turnitscope_codes_v1';
 const STORAGE_KEY_TXNS = 'turnitscope_txns_v1';
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const ADMIN_PAGE_SIZE = 20;
+const ADMIN_ACTIVITY_PAGE_SIZE = 10;
 
 const getUserScopedStorageKey = (key: string, userId?: string): string => {
   if (!userId) return key;
@@ -1114,7 +1115,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // 3. Live Transactions Collection Listener
       // Admins listen to all transactions; individual users query only their own transactions
       const txnsQuery = isCurrentAdmin
-        ? query(collection(db, 'transactions'), orderBy('timestamp', 'desc'), limit(ADMIN_PAGE_SIZE))
+        ? query(collection(db, 'transactions'), orderBy('timestamp', 'desc'), limit(ADMIN_ACTIVITY_PAGE_SIZE))
         : query(
             collection(db, 'transactions'),
             where('userId', '==', firebaseUser.uid),
@@ -1128,7 +1129,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (!transactionsCursorRef.current && snapshot.docs.length > 0) {
               transactionsCursorRef.current = snapshot.docs[snapshot.docs.length - 1];
             }
-            setHasMoreTransactions(snapshot.docs.length === ADMIN_PAGE_SIZE);
+            setHasMoreTransactions(snapshot.docs.length === ADMIN_ACTIVITY_PAGE_SIZE);
           }
           if (!snapshot.empty) {
             const fsTxns: CreditTransaction[] = [];
@@ -1241,7 +1242,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         collection(db, 'transactions'),
         orderBy('timestamp', 'desc'),
         startAfter(cursor),
-        limit(ADMIN_PAGE_SIZE)
+        limit(ADMIN_ACTIVITY_PAGE_SIZE)
       ));
       if (!snapshot) {
         setNotification({ message: 'Could not load older transactions. Please try again.', type: 'error' });
@@ -1272,7 +1273,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return Array.from(byId.values()).sort((a, b) => b.timestamp - a.timestamp);
         });
       }
-      setHasMoreTransactions(snapshot.docs.length === ADMIN_PAGE_SIZE);
+      setHasMoreTransactions(snapshot.docs.length === ADMIN_ACTIVITY_PAGE_SIZE);
     } catch (error) {
       console.error('Could not load the next transaction page:', error);
       setNotification({ message: 'Could not load more transactions. Please try again.', type: 'error' });
@@ -1360,7 +1361,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         const txnsQuery = isCurrentAdmin
-          ? query(collection(db, 'transactions'), orderBy('timestamp', 'desc'), limit(ADMIN_PAGE_SIZE))
+          ? query(collection(db, 'transactions'), orderBy('timestamp', 'desc'), limit(ADMIN_ACTIVITY_PAGE_SIZE))
           : query(
               collection(db, 'transactions'),
               where('userId', '==', firebaseUser.uid),
@@ -1372,7 +1373,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           transactionsCursorRef.current = txnsSnap.docs.length > 0
             ? txnsSnap.docs[txnsSnap.docs.length - 1]
             : null;
-          setHasMoreTransactions(txnsSnap.docs.length === ADMIN_PAGE_SIZE);
+          setHasMoreTransactions(txnsSnap.docs.length === ADMIN_ACTIVITY_PAGE_SIZE);
         }
         if (txnsSnap && !txnsSnap.empty) {
           const fsTxns: CreditTransaction[] = [];

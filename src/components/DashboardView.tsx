@@ -51,13 +51,19 @@ export const DashboardView: React.FC = () => {
   const [downloadingReportId, setDownloadingReportId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleDownloadReport = async (report: (typeof reports)[number]) => {
+  const handleDownloadReport = async (
+    report: (typeof reports)[number],
+    mode: 'similarity' | 'ai'
+  ) => {
     if (report.status !== 'Completed' || downloadingReportId) return;
-    setDownloadingReportId(report.id);
+    const downloadId = `${report.id}-${mode}`;
+    setDownloadingReportId(downloadId);
     try {
-      const mode = report.type === 'AI Detection' ? 'ai' : 'similarity';
       await downloadReportPdf(report, mode);
-      setNotification({ message: 'Report PDF downloaded successfully.', type: 'success' });
+      setNotification({
+        message: `${mode === 'ai' ? 'AI' : 'Similarity'} report PDF downloaded successfully.`,
+        type: 'success',
+      });
     } catch (error) {
       console.error('Report PDF download failed:', error);
       setNotification({
@@ -507,7 +513,7 @@ export const DashboardView: React.FC = () => {
                   <th className="py-3 px-4">Plagiarism</th>
                   <th className="py-3 px-4">AI Score</th>
                   <th className="py-3 px-4">Date</th>
-                  <th className="py-3 px-5 text-right">Download Report</th>
+                  <th className="py-3 px-5 text-right">Download Reports</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -560,27 +566,45 @@ export const DashboardView: React.FC = () => {
                       {rep.date}
                     </td>
                     <td className="py-3.5 px-5 text-right whitespace-nowrap">
-                      <button
-                        type="button"
-                        onClick={() => void handleDownloadReport(rep)}
-                        disabled={rep.status !== 'Completed' || downloadingReportId !== null}
-                        title={rep.status === 'Completed' ? 'Download generated report PDF' : 'Available after report processing completes'}
-                        className="text-indigo-600 hover:text-indigo-800 font-bold text-xs hover:underline inline-flex items-center gap-1 disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
-                      >
-                        {downloadingReportId === rep.id ? (
-                          <>
-                            Generating PDF
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          </>
-                        ) : rep.status === 'Completed' ? (
-                          <>
-                            Download
-                            <Download className="w-3 h-3" />
-                          </>
-                        ) : (
-                          'Processing'
+                      <div className="inline-flex items-center justify-end gap-2">
+                        {rep.type !== 'AI Detection' && (
+                          <button
+                            type="button"
+                            onClick={() => void handleDownloadReport(rep, 'similarity')}
+                            disabled={rep.status !== 'Completed' || downloadingReportId !== null}
+                            title={rep.status === 'Completed' ? 'Download similarity report PDF' : 'Available after report processing completes'}
+                            aria-label={`Download similarity report for ${rep.title}`}
+                            className="text-rose-600 hover:text-rose-800 font-bold text-xs inline-flex items-center gap-1 disabled:cursor-not-allowed disabled:text-slate-400"
+                          >
+                            {downloadingReportId === `${rep.id}-similarity` ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Download className="w-3.5 h-3.5" />
+                            )}
+                            <span>Similarity</span>
+                          </button>
                         )}
-                      </button>
+                        {rep.type !== 'Plagiarism Check' && (
+                          <button
+                            type="button"
+                            onClick={() => void handleDownloadReport(rep, 'ai')}
+                            disabled={rep.status !== 'Completed' || downloadingReportId !== null}
+                            title={rep.status === 'Completed' ? 'Download AI report PDF' : 'Available after report processing completes'}
+                            aria-label={`Download AI report for ${rep.title}`}
+                            className="text-purple-600 hover:text-purple-800 font-bold text-xs inline-flex items-center gap-1 disabled:cursor-not-allowed disabled:text-slate-400"
+                          >
+                            {downloadingReportId === `${rep.id}-ai` ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Download className="w-3.5 h-3.5" />
+                            )}
+                            <span>AI</span>
+                          </button>
+                        )}
+                        {rep.status !== 'Completed' && (
+                          <span className="text-[10px] text-slate-400">Processing</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
