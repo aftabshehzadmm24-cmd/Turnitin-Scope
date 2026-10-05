@@ -20,6 +20,13 @@ export interface ExtractedDocumentData {
 
 const MAX_DOCUMENT_WORDS = 30000;
 
+export const MAX_SIMILARITY_SCORE = 12;
+
+export function clampSimilarityScore(score: number): number {
+  if (!Number.isFinite(score) || score <= 0) return 0;
+  return Math.min(MAX_SIMILARITY_SCORE, score);
+}
+
 export function arrayBufferToBase64(buffer: ArrayBuffer): string {
   let binary = '';
   const bytes = new Uint8Array(buffer);
@@ -670,7 +677,7 @@ function getExactCoveragePositions(totalCandidates: number, targetCount: number)
 /**
  * Splits text into complete sentences and complete paragraphs with exact Turnitin rules:
  * - Table of Contents, Tables, and References are strictly unhighlighted (normal text).
- * - Similarity percentage strictly between 1% and 17% (capped at 17% max).
+ * - Similarity percentage strictly between 1% and 12% (capped at 12% max).
  * - When aiScore <= 20: ZERO AI highlights! Text remains clean and normal.
  * - When aiScore > 20: Proportional complete sentence/paragraph AI highlights (~aiScore%).
  */
@@ -684,8 +691,7 @@ export function generateSmartSnippets(
     excludeBibliography: true,
   }
 ): HighlightedSnippet[] {
-  // Clamping similarity score strictly between 0 and 17% (never more than 17%)
-  const clampedPlagScore = Math.min(17, Math.max(0, plagiarismScore));
+  const clampedPlagScore = clampSimilarityScore(plagiarismScore);
   const excludeQuotes = filterOptions.excludeQuotes !== false;
 
   const cleaned = cleanText(fullText);
@@ -876,4 +882,3 @@ export function generateSmartSnippets(
     };
   });
 }
-

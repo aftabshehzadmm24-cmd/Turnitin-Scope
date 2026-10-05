@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, ScanReport, ActivationCode, PurchaseKey, CreditTransaction, ScanMode, HighlightedSnippet, MatchedSource } from '../types';
-import { cleanText, generateSmartSnippets } from '../utils/documentParser';
+import { cleanText, generateSmartSnippets, MAX_SIMILARITY_SCORE } from '../utils/documentParser';
 import { generateSourcesForDocument } from '../utils/dynamicManuscriptEngine';
 import {
   auth,
@@ -1982,7 +1982,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : Math.floor(Math.random() * 50) + 21;
       const plagScore =
         options.mode === 'plagiarism' || options.mode === 'both'
-          ? Math.floor(Math.random() * 17) + 1
+          ? Math.floor(Math.random() * MAX_SIMILARITY_SCORE) + 1
           : 0;
       const excludeQuotesSetting = options.excludeQuotes !== false;
       const excludeBibliographySetting = options.excludeBibliography !== false;

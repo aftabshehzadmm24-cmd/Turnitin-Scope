@@ -1,5 +1,6 @@
 import React from 'react';
 import { ScanReport, MatchedSource } from '../types';
+import { clampSimilarityScore } from '../utils/documentParser';
 import {
   Building2,
   Globe,
@@ -416,7 +417,7 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
   totalPages: number;
 }> = ({ report, totalPages }) => {
   const submissionId = report.submissionId || 'trn:oid:::2:445438161';
-  const plagScore = Math.min(17, Math.max(1, report.plagiarismScore || 1));
+  const plagScore = Math.max(1, clampSimilarityScore(report.plagiarismScore || 1));
   const matchGroups = report.matchGroups || {
     notCitedOrQuoted: Math.max(1, Math.round(plagScore * 2.8)),
     notCitedOrQuotedScore: plagScore,
@@ -719,7 +720,7 @@ export const TurnitinTopSourcesPage: React.FC<{
                     </span>
                     <div className="leading-tight">
                       <div className="font-bold text-black text-[11px]">
-                        {matchGroups.notCitedOrQuoted || 51} Not Cited or Quoted &nbsp;<span className="font-bold text-black">{matchGroups.notCitedOrQuotedScore ?? (report.plagiarismScore || 16)}%</span>
+                        {matchGroups.notCitedOrQuoted || 51} Not Cited or Quoted &nbsp;<span className="font-bold text-black">{clampSimilarityScore(matchGroups.notCitedOrQuotedScore ?? report.plagiarismScore ?? 1)}%</span>
                       </div>
                       <div className="text-[9.5px] text-slate-500 mt-0.5">
                         Matches with neither in-text citation nor quotation marks
@@ -828,7 +829,7 @@ export const TurnitinTopSourcesPage: React.FC<{
                 {sourcesSlice.map((s, idx) => {
                   const currentIdx = startIndex + idx + 1;
                   const badge = getBadgeColor(currentIdx);
-                  const displaySim = s.similarity < 1 ? '<1%' : `${s.similarity}%`;
+                  const displaySim = s.similarity < 1 ? '<1%' : `${clampSimilarityScore(s.similarity)}%`;
                   const typeLabel =
                     s.type === 'internet'
                       ? 'Internet'
@@ -884,7 +885,7 @@ export const TurnitinTopSourcesPage: React.FC<{
               {sourcesSlice.map((s, idx) => {
                 const currentIdx = startIndex + idx + 1;
                 const badge = getBadgeColor(currentIdx);
-                const displaySim = s.similarity < 1 ? '<1%' : `${s.similarity}%`;
+                const displaySim = s.similarity < 1 ? '<1%' : `${clampSimilarityScore(s.similarity)}%`;
                 const typeLabel =
                   s.type === 'internet'
                     ? 'Internet'

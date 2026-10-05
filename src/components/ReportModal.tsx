@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ScanReport, MatchedSource, HighlightedSnippet } from '../types';
 import { TurnitScopeLogo } from './TurnitScopeLogo';
-import { cleanText } from '../utils/documentParser';
+import { cleanText, MAX_SIMILARITY_SCORE } from '../utils/documentParser';
 import { downloadReportPdf } from '../utils/pdfGenerator';
 import { TurnitinOfficialMultiPageReport } from './TurnitinOfficialMultiPageReport';
 import {
@@ -62,12 +62,16 @@ export const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => 
   // Display only text extracted from the uploaded document.
   const cleanedContent = cleanText(report.text || '');
 
-  // Calculate dynamic similarity score based on filters strictly within 1% to 17%
-  let adjustedPlagScore = report.plagiarismScore > 0 ? Math.min(17, Math.max(1, report.plagiarismScore)) : 0;
-  if (!excludeQuotes && adjustedPlagScore > 0) adjustedPlagScore = Math.min(17, adjustedPlagScore + 2);
-  if (!excludeBibliography && adjustedPlagScore > 0) adjustedPlagScore = Math.min(17, adjustedPlagScore + 3);
+  // Calculate dynamic similarity score based on filters strictly within 1% to 12%
+  let adjustedPlagScore = report.plagiarismScore > 0
+    ? Math.min(MAX_SIMILARITY_SCORE, Math.max(1, report.plagiarismScore))
+    : 0;
+  if (!excludeQuotes && adjustedPlagScore > 0) adjustedPlagScore = Math.min(MAX_SIMILARITY_SCORE, adjustedPlagScore + 2);
+  if (!excludeBibliography && adjustedPlagScore > 0) adjustedPlagScore = Math.min(MAX_SIMILARITY_SCORE, adjustedPlagScore + 3);
   if (excludeSmallMatches && adjustedPlagScore > 3) adjustedPlagScore = Math.max(1, adjustedPlagScore - 2);
-  adjustedPlagScore = adjustedPlagScore > 0 ? Math.min(17, Math.max(1, adjustedPlagScore)) : 0;
+  adjustedPlagScore = adjustedPlagScore > 0
+    ? Math.min(MAX_SIMILARITY_SCORE, Math.max(1, adjustedPlagScore))
+    : 0;
 
   const submissionId = report.submissionId || `trn:oid:${Math.floor(21948194812)}`;
 
@@ -75,7 +79,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => 
   const isAiUnderThreshold = report.aiScore > 0 && report.aiScore <= 20;
   const aiScoreDisplay = isAiUnderThreshold ? '*%' : (report.aiScore > 20 ? `${report.aiScore}%` : '0%');
 
-  // Default sources if none present (0-17% similarity breakdown)
+  // Default sources if none are present (0-12% similarity breakdown)
   const sources: MatchedSource[] = report.sources && report.sources.length > 0 ? report.sources : [
     { id: 's1', name: 'ScienceDirect / Elsevier Academic Archive', url: 'https://sciencedirect.com/science/article/pii', similarity: Math.max(2, Math.floor(adjustedPlagScore * 0.58)), type: 'publication' },
     { id: 's2', name: 'Harvard University Scholar Repository', url: 'https://harvard.edu/dash/handle/291', similarity: Math.max(1, Math.floor(adjustedPlagScore * 0.27)), type: 'student_paper' },

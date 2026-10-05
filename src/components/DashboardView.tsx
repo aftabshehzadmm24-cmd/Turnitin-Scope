@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { ScanMode, ScanReport } from '../types';
-import { extractDocumentDataFromFile, ExtractedDocumentData } from '../utils/documentParser';
+import { clampSimilarityScore, extractDocumentDataFromFile, ExtractedDocumentData } from '../utils/documentParser';
 import {
   Bot,
   Search,
@@ -516,14 +516,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onOpenReport }) =>
                     <td className="py-3.5 px-4 whitespace-nowrap">
                       <span
                         className={`font-bold text-xs ${
-                          rep.plagiarismScore > 20
+                          clampSimilarityScore(rep.plagiarismScore) > 20
                             ? 'text-rose-600'
-                            : rep.plagiarismScore > 10
+                            : clampSimilarityScore(rep.plagiarismScore) > 10
                             ? 'text-amber-600'
                             : 'text-emerald-600'
                         }`}
                       >
-                        {rep.type === 'AI Detection' ? '—' : `${rep.plagiarismScore}%`}
+                        {rep.type === 'AI Detection' ? '—' : `${clampSimilarityScore(rep.plagiarismScore)}%`}
                       </span>
                     </td>
                     <td className="py-3.5 px-4 whitespace-nowrap">

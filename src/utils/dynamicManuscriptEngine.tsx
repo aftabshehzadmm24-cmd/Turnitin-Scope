@@ -17,6 +17,7 @@ import {
   isCitationLine,
   isBibliographyOrReferenceText,
   isExcludedFromHighlighting,
+  clampSimilarityScore,
 } from './documentParser';
 
 export interface FormattedSegment {
@@ -42,7 +43,7 @@ export interface ManuscriptPageData {
 
 /**
  * Generates realistic, domain-tailored matched sources for any uploaded document.
- * Strictly clamps total plagiarism similarity within 1% to 17% (never exceeding 17%).
+ * Strictly clamps total plagiarism similarity within 1% to 12% (never exceeding 12%).
  */
 export function generateSourcesForDocument(
   fileName: string,
@@ -50,7 +51,7 @@ export function generateSourcesForDocument(
   plagiarismScore: number
 ): MatchedSource[] {
   const cleanTitle = (title || fileName || '').toLowerCase();
-  const clampedPlag = Math.min(17, Math.max(0, plagiarismScore));
+  const clampedPlag = clampSimilarityScore(plagiarismScore);
 
   let domainSources: Array<{ name: string; url: string; type: 'internet' | 'publication' | 'student_paper' }> = [];
 
@@ -102,7 +103,7 @@ export function generateSourcesForDocument(
     return [];
   }
 
-  // Distribute the clampedPlag (1% to 17%) proportionally across the sources
+  // Distribute the clampedPlag (1% to 12%) proportionally across the sources
   const count = Math.min(domainSources.length, Math.max(2, Math.min(4, Math.ceil(clampedPlag / 3.5))));
   const selected = domainSources.slice(0, count);
 
@@ -135,7 +136,7 @@ export function generateSourcesForDocument(
 /**
  * Paginates text cleanly into academic manuscript pages for an inserted document.
  * Strictly obeys:
- * - Plagiarism Similarity 1%–17% clamp.
+ * - Plagiarism Similarity 1%–12% clamp.
  * - Exclude Quotes: Table of Contents & Quotes are excluded from plagiarism highlighting.
  * - Exclude Bibliography: References & Bibliography sections are excluded from plagiarism highlighting.
  */
@@ -189,40 +190,8 @@ export function paginateDocumentForTurnitin(
   // Target paragraphs per page (usually 2-3 per page)
   const paragraphsPerPage = Math.max(2, Math.ceil(rawParagraphs.length / targetManuscriptPages));
 
-  // Determine plagiarism highlighting allocation strictly between 1% and 17%
-  const plagScore = Math.min(17, Math.max(1, report.plagiarismScore || 1));
+  const plagScore = Math.max(1, clampSimilarityScore(report.plagiarismScore));
   const aiScore = report.aiScore || 0;
-
-  const scoreToVisibleShare = (score: number) => {
-    if (!Number.isFinite(score) || score <= 0) return 0;
-    return Math.min(1, Math.max(0.01, score / 100));
-  };
-
-  const splitSentenceForHighlight = (sentence: string, highlightWordCount: number, sourceIndex?: number, isAi = false) => {
-    const rawWords = sentence.trim().split(/\s+/).filter(Boolean);
-    if (rawWords.length === 0) return [{ text: '' }];
-
-    const sentenceCap = Math.max(1, Math.min(rawWords.length, Math.round(rawWords.length * 0.12)));
-    const safeHighlightWordCount = Math.min(sentenceCap, Math.max(0, highlightWordCount));
-    const highlightWords = rawWords.slice(0, safeHighlightWordCount).join(' ');
-    const remainderWords = rawWords.slice(safeHighlightWordCount).join(' ');
-
-    const segments: FormattedSegment[] = [];
-    if (highlightWords.trim()) {
-      segments.push({
-        text: `${highlightWords} `,
-        isPlagiarized: !isAi,
-        sourceIndex,
-        isAi,
-      });
-    }
-
-    if (remainderWords.trim()) {
-      segments.push({ text: `${remainderWords} ` });
-    }
-
-    return segments;
-  };
 
   // Track sentence index for consistent highlight assignment
   const sentenceList: { text: string; paraIdx: number; isToc: boolean; isQuote: boolean; isBib: boolean; isTable: boolean }[] = [];
@@ -304,58 +273,6 @@ export function paginateDocumentForTurnitin(
     eligibleIndices.push(i);
   }
 
-  const eligibleWordCount = eligibleIndices.reduce(
-    (sum, idx) => sum + sentenceList[idx].text.split(/\s+/).filter(Boolean).length,
-    0
-  );
-
-  const scoreTargetWords = (score: number) => {
-    if (!Number.isFinite(score) || score <= 0 || eligibleWordCount <= 0) return 0;
-    const share = scoreToVisibleShare(score);
-    return Math.max(1, Math.round(eligibleWordCount * share));
-  };
-
-  const sentenceHighlightWords = new Map<number, number>();
-  const targetHighlightWords = isSimilarity ? scoreTargetWords(plagScore) : scoreTargetWords(aiScore > 20 ? aiScore : 0);
-
-  if (targetHighlightWords > 0 && eligibleIndices.length > 0) {
-    const eligibleSentenceCounts = eligibleIndices.map(index => ({
-      index,
-      wordCount: sentenceList[index].text.split(/\s+/).filter(Boolean).length,
-    }));
-
-    let remaining = targetHighlightWords;
-    for (let i = 0; i < eligibleSentenceCounts.length; i++) {
-      const { index, wordCount } = eligibleSentenceCounts[i];
-      if (remaining <= 0) {
-        sentenceHighlightWords.set(index, 0);
-        continue;
-      }
-
-      const proportionalTarget = eligibleWordCount > 0
-        ? Math.round((wordCount / eligibleWordCount) * targetHighlightWords)
-        : 0;
-      const assigned = Math.min(wordCount, Math.max(0, Math.min(proportionalTarget, remaining)));
-      sentenceHighlightWords.set(index, assigned);
-      remaining -= assigned;
-    }
-
-    // If rounding left too much due to small sentences, exhaust the remaining word budget by filling
-    // the longest eligible sentence chunks without exceeding the actual per-sentence length.
-    if (remaining > 0) {
-      const sorted = [...eligibleSentenceCounts].sort((a, b) => b.wordCount - a.wordCount);
-      for (const item of sorted) {
-        if (remaining <= 0) break;
-        const current = sentenceHighlightWords.get(item.index) ?? 0;
-        const extra = Math.min(item.wordCount - current, remaining);
-        if (extra > 0) {
-          sentenceHighlightWords.set(item.index, current + extra);
-          remaining -= extra;
-        }
-      }
-    }
-  }
-
   const getPercentTarget = (score: number, total: number): number => {
     if (!Number.isFinite(score) || score <= 0 || total <= 0) return 0;
     return Math.max(1, Math.min(total, Math.ceil(total * (score / 100))));
@@ -377,7 +294,7 @@ export function paginateDocumentForTurnitin(
     return Array.from(positions).sort((a, b) => a - b);
   };
 
-  // Decide which sentences are plagiarized (proportional to clamped plagScore 1-17%, ensuring minimum coverage)
+  // Decide which complete sentences are highlighted for the clamped 1-12% similarity score.
   const plagTargetCount = plagScore > 0 && eligibleIndices.length > 0
     ? getPercentTarget(plagScore, eligibleIndices.length)
     : 0;
@@ -431,20 +348,15 @@ export function paginateDocumentForTurnitin(
 
       if (isSimilarity && plagInfo) {
         badgesSet.add(plagInfo.sourceIndex);
-        const highlightWords = sentenceHighlightWords.get(sIdx) ?? 0;
-        const parts = splitSentenceForHighlight(sText, highlightWords || 1, plagInfo.sourceIndex, false);
-        parts.forEach(part => {
-          if (part.text.trim()) {
-            segments.push(part);
-          }
+        segments.push({
+          text: `${sText} `,
+          isPlagiarized: true,
+          sourceIndex: plagInfo.sourceIndex,
         });
       } else if (!isSimilarity && isAi && aiScore > 20) {
-        const highlightWords = sentenceHighlightWords.get(sIdx) ?? 0;
-        const parts = splitSentenceForHighlight(sText, highlightWords || 1, undefined, true);
-        parts.forEach(part => {
-          if (part.text.trim()) {
-            segments.push(part);
-          }
+        segments.push({
+          text: `${sText} `,
+          isAi: true,
         });
       } else {
         segments.push({

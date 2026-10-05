@@ -2,6 +2,7 @@ import jsPDF from 'jspdf';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import { ScanReport } from '../types';
+import { clampSimilarityScore } from './documentParser';
 import { getReportPageLayout, getReportPdfFileName } from './reportPageLayout';
 import { paginateDocumentForTurnitin } from './dynamicManuscriptEngine';
 import {
@@ -2288,7 +2289,7 @@ export async function downloadReportPdf(
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(16.5);
     doc.setTextColor(0, 0, 0);
-    doc.text(`${report.plagiarismScore}% Overall Similarity`, margin, y);
+    doc.text(`${clampSimilarityScore(report.plagiarismScore)}% Overall Similarity`, margin, y);
 
     y += 14;
     doc.setFont('helvetica', 'normal');
@@ -2328,7 +2329,7 @@ export async function downloadReportPdf(
     doc.setFontSize(8);
     doc.setTextColor(0, 0, 0);
     const notCitedCount = report.matchGroups?.notCitedOrQuoted || 51;
-    doc.text(`${notCitedCount} Not Cited or Quoted ${report.plagiarismScore}%`, margin + 14, y);
+    doc.text(`${notCitedCount} Not Cited or Quoted ${clampSimilarityScore(report.plagiarismScore)}%`, margin + 14, y);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7);
     doc.setTextColor(100, 116, 139);
@@ -2485,7 +2486,7 @@ export async function downloadReportPdf(
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(8);
         doc.setTextColor(0, 0, 0);
-        doc.text(`${report.matchGroups?.notCitedOrQuoted || 51} Not Cited or Quoted ${report.plagiarismScore}%`, margin + 14, y);
+        doc.text(`${report.matchGroups?.notCitedOrQuoted || 51} Not Cited or Quoted ${clampSimilarityScore(report.plagiarismScore)}%`, margin + 14, y);
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(7);
         doc.setTextColor(100, 116, 139);
@@ -2579,7 +2580,7 @@ export async function downloadReportPdf(
         doc.text(numText, margin + numWidth / 2, y - 0.5, { align: 'center' });
 
         // 2. Similarity Percentage on the LEFT (directly following the number pill)
-        const simText = `${s.similarity}%`;
+        const simText = `${clampSimilarityScore(s.similarity)}%`;
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(7.5);
         doc.setTextColor(15, 23, 42);

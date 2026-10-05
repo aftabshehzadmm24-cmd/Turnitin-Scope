@@ -11,6 +11,7 @@ import {
   isCitationLine,
   isBibliographyOrReferenceText,
   isExcludedFromHighlighting,
+  clampSimilarityScore,
 } from './documentParser';
 
 export interface RawTextItem {
@@ -227,7 +228,7 @@ function isTabularVisualLine(line: VisualLine): boolean {
 /**
  * Computes Turnitin highlight overlay rectangles directly on the authentic PDF document page.
  * Strictly respects:
- * - Plagiarism Similarity 1% to 17% limit with 4-color rotation and badge indicators.
+ * - Plagiarism Similarity 1% to 12% limit with 4-color rotation and badge indicators.
  * - Excludes Table of Contents, Tables, References, and Quotes.
  * - AI Writing: 0% highlight for scores <= 20% (*% rule), light blue highlights for >= 21%.
  */
@@ -240,7 +241,7 @@ export function computeHighlightsForPage(
   mode: 'ai' | 'similarity'
 ): DocHighlightBox[] {
   const isSimilarity = mode === 'similarity';
-  const plagScore = Math.min(17, Math.max(0, report.plagiarismScore || 0));
+  const plagScore = clampSimilarityScore(report.plagiarismScore || 0);
   const aiScore = report.aiScore || 0;
 
   // If Similarity mode and 0% plagiarism score, nothing to highlight
@@ -354,149 +355,134 @@ export function computeHighlightsForPage(
 
   if (eligibleLineIndices.length === 0) return [];
 
-  const highlightBoxes: DocHighlightBox[] = [];
-
-  // Check if report.snippets has pre-calculated matches
-  const hasSnippets = report.snippets && report.snippets.length > 0;
-  const snippetMatchedLineIndices = new Map<number, { sourceIndex: number; type: 'plagiarized' | 'ai' }>();
-
-  if (hasSnippets) {
-    for (const idx of eligibleLineIndices) {
-      const lineText = lines[idx].lineText.toLowerCase();
-      for (const s of report.snippets) {
-        if (
-          (isSimilarity && s.type === 'plagiarized') ||
-          (!isSimilarity && s.type === 'ai_generated')
-        ) {
-          const sText = s.text.toLowerCase();
-          if (
-            (lineText.length > 15 && sText.includes(lineText.slice(0, 25))) ||
-            (sText.length > 15 && lineText.includes(sText.slice(0, 25)))
-          ) {
-            snippetMatchedLineIndices.set(idx, {
-              sourceIndex: s.sourceIndex || 1,
-              type: isSimilarity ? 'plagiarized' : 'ai',
-            });
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  // Determine line highlights
-  const highlightedLines = new Map<number, { sourceIndex: number; isBlue: boolean; showBadge: boolean }>();
-
-  if (snippetMatchedLineIndices.size > 0) {
-    const totalEligibleLines = eligibleLineIndices.length;
-    const targetLineCount = isSimilarity
-      ? Math.max(1, Math.min(totalEligibleLines, Math.round((plagScore / 100) * totalEligibleLines)))
-      : aiScore > 20
-        ? Math.max(1, Math.min(totalEligibleLines, Math.round((aiScore / 100) * totalEligibleLines)))
-        : 0;
-
-    const sortedIdxs = Array.from(snippetMatchedLineIndices.keys()).sort((a, b) => a - b);
-    let selected = 0;
-    for (let i = 0; i < sortedIdxs.length && targetLineCount > 0; i++) {
-      if (selected >= targetLineCount) break;
-      const lineIdx = sortedIdxs[i];
-      const match = snippetMatchedLineIndices.get(lineIdx)!;
-      const isFirstOfGroup = i === 0 || sortedIdxs[i - 1] !== lineIdx - 1;
-      highlightedLines.set(lineIdx, {
-        sourceIndex: match.sourceIndex,
-        isBlue: match.sourceIndex === 2,
-        showBadge: isSimilarity && isFirstOfGroup,
-      });
-      selected++;
-    }
-  } else {
-    // Proportional authentic allocation matching the exact reported percentage.
-    const exactPercentTarget = (score: number, total: number) => {
-      if (!Number.isFinite(score) || score <= 0 || total <= 0) return 0;
-      return Math.max(1, Math.min(total, Math.round((score / 100) * total)));
-    };
-
-    const getLineSelectionIndexes = (total: number, targetCount: number): number[] => {
-      if (!Number.isFinite(targetCount) || targetCount <= 0 || total <= 0) return [];
-      const safeTarget = Math.min(total, Math.max(1, Math.round(targetCount)));
-      const indices = new Set<number>();
-
-      for (let i = 0; i < safeTarget; i++) {
-        const pos = Math.min(
-          total - 1,
-          Math.max(0, Math.round(((i + 0.5) * total) / safeTarget))
-        );
-        indices.add(pos);
-      }
-
-      return Array.from(indices).sort((a, b) => a - b);
-    };
-
-    if (isSimilarity) {
-      const targetCount = exactPercentTarget(plagScore, eligibleLineIndices.length);
-      const selectedLines = getLineSelectionIndexes(eligibleLineIndices.length, targetCount);
-      let clusterColorIndex = (pageIndex % 4) + 1;
-
-      for (const pos of selectedLines) {
-        const lineIdx = eligibleLineIndices[pos];
-        const srcIdx = clusterColorIndex;
-        clusterColorIndex = (clusterColorIndex % 4) + 1;
-
-        highlightedLines.set(lineIdx, {
-          sourceIndex: srcIdx,
-          isBlue: srcIdx === 2,
-          showBadge: true,
-        });
-      }
+  type SentenceRange = {
+    text: string;
+    sourceIndex?: number;
+    lineRanges: Array<{ lineIdx: number; start: number; end: number }>;
+  };
+  const sentences: SentenceRange[] = [];
+  const lineGroups: number[][] = [];
+  for (const lineIdx of eligibleLineIndices) {
+    const lastGroup = lineGroups[lineGroups.length - 1];
+    if (!lastGroup || lastGroup[lastGroup.length - 1] !== lineIdx - 1) {
+      lineGroups.push([lineIdx]);
     } else {
-      const targetCount = aiScore > 20 ? exactPercentTarget(aiScore, eligibleLineIndices.length) : 0;
-      if (targetCount > 0) {
-        const selectedLines = getLineSelectionIndexes(eligibleLineIndices.length, targetCount);
-
-        for (const pos of selectedLines) {
-          const lineIdx = eligibleLineIndices[pos];
-          highlightedLines.set(lineIdx, {
-            sourceIndex: 1,
-            isBlue: true,
-            showBadge: false,
-          });
-        }
-      }
+      lastGroup.push(lineIdx);
     }
   }
 
-  // Convert highlighted lines to visual highlight boxes with precise coordinates
-  for (const [lineIdx, config] of highlightedLines.entries()) {
-    const line = lines[lineIdx];
-    if (!line) continue;
+  for (const lineGroup of lineGroups) {
+    const offsets: Array<{ lineIdx: number; start: number; end: number }> = [];
+    let combinedText = '';
+    for (const lineIdx of lineGroup) {
+      const lineText = lines[lineIdx].lineText;
+      offsets.push({ lineIdx, start: combinedText.length, end: combinedText.length + lineText.length });
+      combinedText += `${lineText} `;
+    }
 
-    // Compute snug bounding box around the line text
-    const paddingX = 2;
-    const paddingY = 1;
-    const left = Math.max(30, line.left - paddingX);
-    const top = Math.max(48, line.top - paddingY);
-    const width = Math.min(pageWidth - left - 30, line.width + paddingX * 2);
-    const height = Math.max(11, line.height + paddingY * 2);
+    const sentencePattern = /[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g;
+    for (const match of combinedText.matchAll(sentencePattern)) {
+      const rawSentence = match[0];
+      const leadingWhitespace = rawSentence.length - rawSentence.trimStart().length;
+      const sentenceStart = (match.index ?? 0) + leadingWhitespace;
+      const sentenceText = rawSentence.trim();
+      const sentenceEnd = sentenceStart + sentenceText.length;
+      if (sentenceText.length < 15 || isExcludedFromHighlighting(sentenceText)) continue;
+      if (excludeQuotes && isQuoteText(sentenceText)) continue;
 
-    // Numbered badge appears on the LEFT side of the highlighted text (in the gutter/margin)
-    const badgeLeft = Math.max(10, left - 15);
-    const badgeTop = top + (height - 12) / 2;
+      const lineRanges = offsets
+        .filter(offset => offset.end > sentenceStart && offset.start < sentenceEnd)
+        .map(offset => ({
+          lineIdx: offset.lineIdx,
+          start: Math.max(0, sentenceStart - offset.start),
+          end: Math.min(lines[offset.lineIdx].lineText.length, sentenceEnd - offset.start),
+        }))
+        .filter(range => range.end > range.start);
 
-    highlightBoxes.push({
-      id: `hl-${pageIndex}-${lineIdx}`,
-      left,
-      top,
-      width,
-      height,
-      type: isSimilarity ? 'plagiarized' : 'ai',
-      sourceIndex: config.sourceIndex,
-      isBlueUnderlined: false,
-      showBadge: config.showBadge,
-      badgeNumber: config.sourceIndex,
-      badgeLeft,
-      badgeTop,
-    });
+      if (lineRanges.length === 0) continue;
+      const normalizedSentence = sentenceText.toLowerCase();
+      const matchingSnippet = report.snippets?.find(snippet => {
+        const expectedType = isSimilarity ? 'plagiarized' : 'ai_generated';
+        return snippet.type === expectedType &&
+          (normalizedSentence.includes(snippet.text.toLowerCase()) ||
+            snippet.text.toLowerCase().includes(normalizedSentence));
+      });
+      sentences.push({
+        text: sentenceText,
+        sourceIndex: matchingSnippet?.sourceIndex,
+        lineRanges,
+      });
+    }
   }
+
+  if (sentences.length === 0) return [];
+  const matchingSentences = sentences.filter(sentence => sentence.sourceIndex !== undefined);
+  const selectionPool = matchingSentences.length > 0 ? matchingSentences : sentences;
+  const score = isSimilarity ? plagScore : aiScore;
+  const targetCount = Math.max(1, Math.min(selectionPool.length, Math.round(score / 100 * sentences.length)));
+  const selectedPositions = new Set<number>();
+  for (let i = 0; i < targetCount; i++) {
+    selectedPositions.add(Math.min(
+      selectionPool.length - 1,
+      Math.round(((i + 0.5) * selectionPool.length) / targetCount),
+    ));
+  }
+
+  const highlightBoxes: DocHighlightBox[] = [];
+  const selectedSentences = Array.from(selectedPositions)
+    .sort((a, b) => a - b)
+    .map(position => selectionPool[position]);
+
+  selectedSentences.forEach((sentence, sentenceIndex) => {
+    sentence.lineRanges.forEach((range, rangeIndex) => {
+      const line = lines[range.lineIdx];
+      let textOffset = 0;
+      let left = Number.POSITIVE_INFINITY;
+      let right = Number.NEGATIVE_INFINITY;
+      let top = Number.POSITIVE_INFINITY;
+      let bottom = Number.NEGATIVE_INFINITY;
+
+      for (const item of line.items) {
+        const itemText = item.str.trim();
+        const itemStart = textOffset;
+        const itemEnd = itemStart + itemText.length;
+        const overlapStart = Math.max(range.start, itemStart);
+        const overlapEnd = Math.min(range.end, itemEnd);
+        if (overlapEnd > overlapStart && itemText.length > 0) {
+          const itemLeft = item.left + item.width * ((overlapStart - itemStart) / itemText.length);
+          const itemRight = item.left + item.width * ((overlapEnd - itemStart) / itemText.length);
+          left = Math.min(left, itemLeft);
+          right = Math.max(right, itemRight);
+          top = Math.min(top, item.top);
+          bottom = Math.max(bottom, item.top + item.height);
+        }
+        textOffset = itemEnd + 1;
+      }
+
+      if (!Number.isFinite(left) || right <= left) return;
+      const padding = 1;
+      const boxLeft = Math.max(30, left - padding);
+      const boxTop = Math.max(48, top - padding);
+      const boxRight = Math.min(pageWidth - 30, right + padding);
+      const boxBottom = Math.min(pageHeight - 48, bottom + padding);
+      const showBadge = isSimilarity && rangeIndex === 0;
+      const sourceIndex = isSimilarity ? sentence.sourceIndex || ((sentenceIndex % 4) + 1) : 1;
+
+      highlightBoxes.push({
+        id: `hl-${pageIndex}-${sentenceIndex}-${range.lineIdx}`,
+        left: boxLeft,
+        top: boxTop,
+        width: Math.max(1, boxRight - boxLeft),
+        height: Math.max(11, boxBottom - boxTop),
+        type: isSimilarity ? 'plagiarized' : 'ai',
+        sourceIndex,
+        showBadge,
+        badgeNumber: sourceIndex,
+        badgeLeft: Math.max(10, boxLeft - 15),
+        badgeTop: boxTop + (Math.max(11, boxBottom - boxTop) - 12) / 2,
+      });
+    });
+  });
 
   return highlightBoxes;
 }
