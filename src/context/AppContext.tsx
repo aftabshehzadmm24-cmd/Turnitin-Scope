@@ -45,6 +45,7 @@ interface AppContextType {
   isScanning: boolean;
   scanProgress: { step: string; percent: number } | null;
   notification: { message: string; type: 'success' | 'error' | 'info' } | null;
+  isIdleWarning: boolean;
   isProfileModalOpen: boolean;
   isSidebarOpen: boolean;
 
@@ -109,6 +110,8 @@ const STORAGE_KEY_REPORTS = 'turnitscope_reports_v1';
 const STORAGE_KEY_CODES = 'turnitscope_codes_v1';
 const STORAGE_KEY_TXNS = 'turnitscope_txns_v1';
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const IDLE_TIMEOUT_MS = 2 * 60 * 1000;
+const IDLE_WARNING_DELAY_MS = IDLE_TIMEOUT_MS - 30 * 1000;
 
 const getUserScopedStorageKey = (key: string, userId?: string): string => {
   if (!userId) return key;
@@ -433,6 +436,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isScanning, setIsScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ step: string; percent: number } | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [isIdleWarning, setIsIdleWarning] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
@@ -755,6 +759,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!firebaseUser || isAuthLoading) {
+      setIsIdleWarning(false);
+      return;
+    }
+
+    let warningTimer: ReturnType<typeof setTimeout>;
+    let signOutTimer: ReturnType<typeof setTimeout>;
+
+    const resetIdleTimers = () => {
+      clearTimeout(warningTimer);
+      clearTimeout(signOutTimer);
+      setIsIdleWarning(false);
+      warningTimer = setTimeout(() => setIsIdleWarning(true), IDLE_WARNING_DELAY_MS);
+      signOutTimer = setTimeout(() => {
+        setIsIdleWarning(false);
+        void signOutAuth();
+      }, IDLE_TIMEOUT_MS);
+    };
+
+    const activityEvents = ['pointerdown', 'keydown', 'scroll', 'touchstart', 'mousemove'] as const;
+    activityEvents.forEach(event => window.addEventListener(event, resetIdleTimers, { passive: true }));
+    resetIdleTimers();
+
+    return () => {
+      clearTimeout(warningTimer);
+      clearTimeout(signOutTimer);
+      activityEvents.forEach(event => window.removeEventListener(event, resetIdleTimers));
+    };
+  }, [firebaseUser, isAuthLoading]);
 
   // Live real-time Firestore synchronization for users, activation codes, and transactions
   useEffect(() => {
@@ -1860,6 +1895,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isScanning,
         scanProgress,
         notification,
+        isIdleWarning,
         isProfileModalOpen,
         firebaseUser,
         isAuthLoading,

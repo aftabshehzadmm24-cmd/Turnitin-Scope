@@ -13,7 +13,7 @@ import { AuthGate } from './components/AuthGate';
 import { TurnitScopeLogo } from './components/TurnitScopeLogo';
 import { ToastNotificationBanner } from './components/ToastNotificationBanner';
 import { ScanReport } from './types';
-import { CheckCircle2, AlertCircle, Info, Loader2 } from 'lucide-react';
+import { AlertCircle, Loader2 } from 'lucide-react';
 
 const AppContent: React.FC = () => {
   const {
@@ -26,6 +26,7 @@ const AppContent: React.FC = () => {
     setNotification,
     firebaseUser,
     isAuthLoading,
+    isIdleWarning,
   } = useApp();
 
   const getPageInfo = () => {
@@ -87,6 +88,19 @@ const AppContent: React.FC = () => {
               {activeTab === 'redeem' && <RedeemCodeView />}
             </main>
           </div>
+        </div>
+      )}
+
+      {isIdleWarning && (
+        <div
+          className="fixed top-4 right-4 z-50 flex max-w-md items-center gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 shadow-xl"
+          role="alert"
+          aria-live="assertive"
+        >
+          <AlertCircle className="h-5 w-5 shrink-0 text-amber-600" />
+          <p className="text-sm font-medium">
+            You will be signed out in 30 seconds due to inactivity. Move, tap, or press a key to stay signed in.
+          </p>
         </div>
       )}
 
