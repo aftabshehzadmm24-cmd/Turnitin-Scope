@@ -169,7 +169,8 @@ function shouldHideTurnitinHeaderDivider(pageNum: number, mode: 'ai' | 'similari
 }
 
 function downloadPdfFromBytes(pdfBytes: Uint8Array, fileName: string) {
-  const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+  const pdfBuffer = Uint8Array.from(pdfBytes).buffer;
+  const blob = new Blob([pdfBuffer], { type: 'application/pdf' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -2462,7 +2463,7 @@ export async function downloadReportPdf(
           report,
           mode
         );
-        const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
+        const blob = new Blob([finalPdfBytes.slice().buffer], { type: 'application/pdf' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
