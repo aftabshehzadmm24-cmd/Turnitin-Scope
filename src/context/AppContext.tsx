@@ -38,7 +38,7 @@ import {
 } from 'firebase/firestore';
 import { buildUserFromAuthProfile } from '../lib/userProfiles';
 import { deleteReportFile, getReportFile, pruneExpiredReportFiles, saveReportFile } from '../utils/reportFileStore';
-import { getInstitutionName } from '../utils/institutionName';
+import { DEFAULT_INSTITUTION_NAME, getInstitutionName } from '../utils/institutionName';
 
 export { buildUserFromAuthProfile };
 
@@ -2453,7 +2453,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sources: sourcesList,
         contentSample: sampleText,
         snippets: generatedSnippets,
-        institution: options.institution || 'Zhōngguó Kēxué Jìshù Dàxué',
+        institution: getInstitutionName(options.institution || DEFAULT_INSTITUTION_NAME),
         submissionDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }),
         downloadDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }),
         pageCount: calculatedPageCount,
