@@ -4,7 +4,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { ScanReport } from '../types';
 import { clampSimilarityScore } from './documentParser';
 import { getReportPageLayout, getReportPdfFileName } from './reportPageLayout';
-import { getInstitutionName } from './institutionName';
+import { DEFAULT_INSTITUTION_NAME, getInstitutionName } from './institutionName';
 import { paginateDocumentForTurnitin } from './dynamicManuscriptEngine';
 import {
   computeHighlightsForPage,
@@ -84,6 +84,10 @@ const BADGE_GREEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10
 
 const GRAD_CAP_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="120" height="120">
   <path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3z M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82z" fill="#475569"/>
+</svg>`;
+
+const INSTITUTION_NAME_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 40" width="1120" height="80">
+  <text x="0" y="31" font-family="Arial, sans-serif" font-size="30" fill="#475569">${DEFAULT_INSTITUTION_NAME}</text>
 </svg>`;
 
 const CAUTION_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="120" height="120">
@@ -1946,6 +1950,7 @@ export async function downloadReportPdf(
     badgeYellowPng,
     badgeGreenPng,
     gradCapPng,
+    institutionNamePng,
     cautionPng,
     globePng,
     bookPng,
@@ -1957,6 +1962,7 @@ export async function downloadReportPdf(
     renderSvgToPng(BADGE_YELLOW_SVG, 200, 200),
     renderSvgToPng(BADGE_GREEN_SVG, 200, 200),
     renderSvgToPng(GRAD_CAP_SVG, 120, 120),
+    renderSvgToPng(INSTITUTION_NAME_SVG, 1120, 80),
     renderSvgToPng(CAUTION_SVG, 120, 120),
     renderSvgToPng(GLOBE_SVG, 60, 60),
     renderSvgToPng(BOOK_SVG, 60, 60),
@@ -2109,17 +2115,14 @@ export async function downloadReportPdf(
 
   // Institution with icon
   y += titleLines.length * 18 + 6;
+  if (!institutionNamePng) {
+    throw new Error('Could not render the institution name for the report PDF.');
+  }
   if (gradCapPng) {
     doc.addImage(gradCapPng, 'PNG', margin, y - 8.5, 9, 9);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9.5);
-    doc.setTextColor(71, 85, 105);
-    doc.text(getInstitutionName(report.institution), margin + 13, y);
+    doc.addImage(institutionNamePng, 'PNG', margin + 13, y - 9.3, 154, 11);
   } else {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9.5);
-    doc.setTextColor(71, 85, 105);
-    doc.text(getInstitutionName(report.institution), margin, y);
+    doc.addImage(institutionNamePng, 'PNG', margin, y - 9.3, 154, 11);
   }
 
   // Thin Divider
