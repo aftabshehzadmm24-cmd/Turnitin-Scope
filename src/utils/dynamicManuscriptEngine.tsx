@@ -19,6 +19,7 @@ import {
   isExcludedFromHighlighting,
   clampSimilarityScore,
 } from './documentParser';
+import { getInstitutionName } from './institutionName';
 
 export interface FormattedSegment {
   text: string;
@@ -463,7 +464,7 @@ export const DynamicTurnitinManuscriptPage: React.FC<{
             </h1>
             <div className="text-xs text-slate-600 font-medium">
               <span>{report.author || 'Author'}</span>
-              {report.institution && <span> • {report.institution}</span>}
+              {report.institution && <span> • {getInstitutionName(report.institution)}</span>}
             </div>
           </div>
         )}

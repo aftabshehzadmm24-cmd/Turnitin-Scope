@@ -4,6 +4,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { ScanReport } from '../types';
 import { clampSimilarityScore } from './documentParser';
 import { getReportPageLayout, getReportPdfFileName } from './reportPageLayout';
+import { getInstitutionName } from './institutionName';
 import { paginateDocumentForTurnitin } from './dynamicManuscriptEngine';
 import {
   computeHighlightsForPage,
@@ -1791,7 +1792,9 @@ export function drawUniversalManuscriptPdfPage(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8.5);
     doc.setTextColor(71, 85, 105);
-    const authorLine = `${report.author || 'Author'}${report.institution ? ' • ' + report.institution : ''}`;
+    const authorLine = `${report.author || 'Author'}${
+      report.institution ? ' • ' + getInstitutionName(report.institution) : ''
+    }`;
     doc.text(authorLine, pageWidth / 2, textY, { align: 'center' });
     textY += 12;
 
@@ -2111,12 +2114,12 @@ export async function downloadReportPdf(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9.5);
     doc.setTextColor(71, 85, 105);
-    doc.text(report.institution || 'Zhōngguó Kēxué Jìshù Dàxué', margin + 13, y);
+    doc.text(getInstitutionName(report.institution), margin + 13, y);
   } else {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9.5);
     doc.setTextColor(71, 85, 105);
-    doc.text(report.institution || 'Zhōngguó Kēxué Jìshù Dàxué', margin, y);
+    doc.text(getInstitutionName(report.institution), margin, y);
   }
 
   // Thin Divider

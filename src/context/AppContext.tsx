@@ -38,6 +38,7 @@ import {
 } from 'firebase/firestore';
 import { buildUserFromAuthProfile } from '../lib/userProfiles';
 import { deleteReportFile, getReportFile, pruneExpiredReportFiles, saveReportFile } from '../utils/reportFileStore';
+import { getInstitutionName } from '../utils/institutionName';
 
 export { buildUserFromAuthProfile };
 
@@ -288,6 +289,7 @@ const sanitizePersistedReports = (items: ScanReport[] = [], userId?: string): Sc
 
         return {
           ...r,
+          institution: r.institution ? getInstitutionName(r.institution) : undefined,
           userId: r.userId || userId,
           expiresAt: getReportExpiry(r) ?? Date.now() + ONE_DAY_MS,
           submissionId: r.submissionId || `trn:oid:${Math.floor(21940000000 + Math.random() * 99999999)}`,

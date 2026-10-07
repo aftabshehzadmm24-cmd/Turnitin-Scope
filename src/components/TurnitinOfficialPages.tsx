@@ -1,6 +1,7 @@
 import React from 'react';
 import { ScanReport, MatchedSource } from '../types';
 import { clampSimilarityScore } from '../utils/documentParser';
+import { getInstitutionName } from '../utils/institutionName';
 import {
   Building2,
   Globe,
@@ -209,7 +210,7 @@ export const TurnitinCoverPage: React.FC<{
         .join(' ')
     : 'A B';
 
-  const institution = report.institution || 'Zhōngguó Kēxué Jìshù Dàxué';
+  const institution = getInstitutionName(report.institution);
   const subDate = report.submissionDate || report.date || 'Sep 12, 2026, 3:50 PM GMT';
   const dlDate = report.downloadDate || 'Sep 12, 2026, 3:51 PM GMT';
   const manuscriptPages =
