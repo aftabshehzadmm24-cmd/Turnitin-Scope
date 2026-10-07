@@ -289,7 +289,7 @@ const sanitizePersistedReports = (items: ScanReport[] = [], userId?: string): Sc
 
         return {
           ...r,
-          institution: r.institution ? getInstitutionName(r.institution) : undefined,
+          institution: getInstitutionName(r.institution),
           userId: r.userId || userId,
           expiresAt: getReportExpiry(r) ?? Date.now() + ONE_DAY_MS,
           submissionId: r.submissionId || `trn:oid:${Math.floor(21940000000 + Math.random() * 99999999)}`,
@@ -2453,7 +2453,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sources: sourcesList,
         contentSample: sampleText,
         snippets: generatedSnippets,
-        institution: getInstitutionName(options.institution || DEFAULT_INSTITUTION_NAME),
+        institution: DEFAULT_INSTITUTION_NAME,
         submissionDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }),
         downloadDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }),
         pageCount: calculatedPageCount,
