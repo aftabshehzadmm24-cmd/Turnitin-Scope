@@ -2363,17 +2363,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         both: 'Both',
       };
 
-      // Local detector distribution: 15% at 0%, 70% at 1-20%, and 15% at 21-70%.
+      // Local detector distribution: 45% at 21-90% and 55% at 0-20%.
       // Scores are independent of the document name and drive the existing highlight renderer.
       const aiEnabled = options.mode === 'ai' || options.mode === 'both';
       const aiRoll = Math.random();
       const aiScore = !aiEnabled
         ? 0
-        : aiRoll < 0.15
-        ? 0
-        : aiRoll < 0.85
-        ? Math.floor(Math.random() * 20) + 1
-        : Math.floor(Math.random() * 50) + 21;
+        : aiRoll < 0.45
+        ? Math.floor(Math.random() * 70) + 21
+        : Math.floor(Math.random() * 21);
       const plagScore =
         options.mode === 'plagiarism' || options.mode === 'both'
           ? Math.floor(Math.random() * MAX_SIMILARITY_SCORE) + 1

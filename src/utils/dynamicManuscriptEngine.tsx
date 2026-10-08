@@ -312,10 +312,7 @@ export function paginateDocumentForTurnitin(
     }
   }
 
-  // Decide which sentences are AI highlighted according to user criteria:
-  // ai 1-20% result: (*%) no highlight in report (0% highlighted)
-  // ai 21-70%: highlight approximately 15% of eligible text
-  // ai 0%: no highlighter
+  // Scores up to 20% remain unhighlighted; higher scores target the same share of eligible sentences.
   let aiTargetCount = 0;
   if (aiScore > 20) {
     aiTargetCount = getPercentTarget(aiScore, eligibleIndices.length || totalSentences);
@@ -327,7 +324,7 @@ export function paginateDocumentForTurnitin(
     const positions = getExactCoveragePositions(eligibleIndices.length, aiTargetCount);
     for (const pos of positions) {
       const targetIdx = eligibleIndices[pos];
-      if (!plagSentenceIndices.has(targetIdx)) {
+      if (!isSimilarity || !plagSentenceIndices.has(targetIdx)) {
         aiSentenceIndices.add(targetIdx);
       }
     }

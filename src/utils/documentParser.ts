@@ -781,15 +781,13 @@ export function generateSmartSnippets(
   const aiIndices = new Set<number>();
   let usedAiWords = 0;
   if (aiTargetWords > 0 && eligibleEntries.length > 0) {
-    const sorted = [...eligibleEntries].filter(entry => !plagIndices.has(entry.index)).sort((a, b) => b.wordCount - a.wordCount);
+    const sorted = [...eligibleEntries]
+      .filter(entry => !plagIndices.has(entry.index))
+      .sort((a, b) => a.wordCount - b.wordCount);
     for (const entry of sorted) {
       if (usedAiWords >= aiTargetWords) break;
-      const maxSentenceWords = Math.max(2, Math.min(entry.wordCount, Math.ceil(entry.wordCount * 0.25)));
-      const addWords = Math.min(maxSentenceWords, aiTargetWords - usedAiWords);
-      if (addWords > 0) {
-        aiIndices.add(entry.index);
-        usedAiWords += addWords;
-      }
+      aiIndices.add(entry.index);
+      usedAiWords += entry.wordCount;
     }
   }
 

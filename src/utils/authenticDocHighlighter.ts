@@ -417,7 +417,7 @@ export function computeHighlightsForPage(
 
   if (sentences.length === 0) return [];
   const matchingSentences = sentences.filter(sentence => sentence.sourceIndex !== undefined);
-  const selectionPool = matchingSentences.length > 0 ? matchingSentences : sentences;
+  const selectionPool = isSimilarity && matchingSentences.length > 0 ? matchingSentences : sentences;
   const score = isSimilarity ? plagScore : aiScore;
   const targetCount = Math.max(1, Math.min(selectionPool.length, Math.round(score / 100 * sentences.length)));
   const selectedPositions = new Set<number>();
