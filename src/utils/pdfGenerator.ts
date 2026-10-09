@@ -2250,7 +2250,7 @@ export async function downloadReportPdf(
     doc.setDrawColor(226, 232, 240);
     doc.line(margin, y, pageWidth - margin, y);
 
-    if (report.aiScore >= 21 && report.aiScore <= 70) {
+    if (report.aiScore >= 21 && report.aiScore <= 90) {
       const aiGeneratedCount = report.snippets.filter(snippet => snippet.type === 'ai_generated').length;
       y += 17;
       doc.setFillColor(6, 182, 212);

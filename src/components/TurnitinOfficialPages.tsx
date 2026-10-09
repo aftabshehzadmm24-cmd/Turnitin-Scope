@@ -332,7 +332,7 @@ export const TurnitinAIOverviewPage: React.FC<{
 }> = ({ report, totalPages, mode = 'ai' }) => {
   const submissionId = report.submissionId || 'trn:oid:::1:9948210344';
   const isBelowThreshold = report.aiScore <= 20 && report.aiScore >= 1;
-  const showAiGeneratedSummary = report.aiScore >= 21 && report.aiScore <= 70;
+  const showAiGeneratedSummary = report.aiScore >= 21 && report.aiScore <= 90;
   const aiGeneratedCount = report.snippets.filter(snippet => snippet.type === 'ai_generated').length;
   const scoreDisplay = formatTurnitinAiScore(report.aiScore);
 
