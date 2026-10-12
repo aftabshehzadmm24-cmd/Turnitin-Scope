@@ -58,3 +58,28 @@ test('extractDocumentDataFromFile reads a DOCX without a LibreOffice conversion 
     globalThis.fetch = originalFetch;
   }
 });
+
+test('extractTextFromDocxArrayBuffer keeps all paragraphs from a multi-section DOCX', async () => {
+  const zip = new JSZip();
+
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>
+        <w:p><w:r><w:t>Alpha section heading</w:t></w:r></w:p>
+        <w:p><w:r><w:t>First paragraph with real content.</w:t></w:r></w:p>
+        <w:p><w:r><w:t>Second paragraph with more text.</w:t></w:r></w:p>
+        <w:p><w:r><w:t>Third paragraph for completeness.</w:t></w:r></w:p>
+      </w:body>
+    </w:document>`
+  );
+
+  const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  const text = await extractTextFromDocxArrayBuffer(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+
+  assert.match(text, /Alpha section heading/);
+  assert.match(text, /First paragraph with real content/);
+  assert.match(text, /Second paragraph with more text/);
+  assert.match(text, /Third paragraph for completeness/);
+});

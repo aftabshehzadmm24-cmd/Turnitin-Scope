@@ -34,10 +34,24 @@ export async function extractTextFromDocxArrayBuffer(arrayBuffer: ArrayBuffer): 
     if (!docXmlFile) return '';
 
     const xml = await docXmlFile.async('string');
-    const textMatches = [...xml.matchAll(/<w:t(?:\s+[^>]*)?>([\s\S]*?)<\/w:t>/gi)];
-    const text = textMatches
-      .map((match) => match[1].replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'))
-      .join(' ');
+    const text = xml
+      .replace(/<w:p\b[^>]*>/gi, '\n')
+      .replace(/<\/w:p>/gi, '\n')
+      .replace(/<w:tr\b[^>]*>/gi, '\n')
+      .replace(/<\/w:tr>/gi, '\n')
+      .replace(/<w:br\b[^>]*\/?\s*>/gi, '\n')
+      .replace(/<w:tab\b[^>]*\/?\s*>/gi, '\t')
+      .replace(/<w:(?:t|instrText|delText)(?:\s+[^>]*)?>([\s\S]*?)<\/w:(?:t|instrText|delText)>/gi, (_, value: string) => {
+        return value
+          .replace(/<!\[CDATA\[|\]\]>/g, '')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&amp;/g, '&')
+          .replace(/&apos;/g, "'")
+          .replace(/&quot;/g, '"');
+      })
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ');
 
     const cleanedText = cleanText(text);
     if (cleanedText.length >= 30) {
