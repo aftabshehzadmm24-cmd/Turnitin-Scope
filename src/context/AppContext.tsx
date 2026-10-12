@@ -2384,7 +2384,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? `${options.authorFirst || ''} ${options.authorLast || ''}`.trim()
           : currentUser.name;
 
-      const sampleText = cleanText(options.fileContent || '');
+      const rawSampleText = (options.fileContent || '').replace(/\r/g, '');
+      const sampleText = rawSampleText
+        .replace(/PK[\s\S]*?(docProps|word|settings|styles|app\.xml)[\s\S]*?PK/gi, '')
+        .replace(/PK[\x00-\x20].*?(\.xml|\.rels)/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\uFFFD]/g, ' ')
+        .replace(/[^\x20-\x7E\n\r\t\u00A0-\u024F\u1E00-\u1EFF]/g, ' ')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n\s*\n/g, '\n\n')
+        .trim();
+
       if (!sampleText || sampleText.length < 50 || sampleText.includes('PK') || sampleText.includes('docProps')) {
         return {
           success: false,

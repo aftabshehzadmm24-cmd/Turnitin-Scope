@@ -4,7 +4,6 @@ import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import { HighlightedSnippet } from '../types';
 import { cleanBase64ToUint8Array } from './pdfPageRenderer';
-import { extractTextFromDocxArrayBuffer } from './docxTextExtractor.ts';
 
 export interface ExtractedDocumentData {
   text: string;
@@ -52,11 +51,9 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
     const base64Data = arrayBufferToBase64(arrayBuffer);
 
     if (fileExt === 'docx' || fileExt === 'doc') {
-      const docxTextFallback = fileExt === 'docx' ? await extractTextFromDocxArrayBuffer(arrayBuffer) : '';
-
       let convertedPdfBase64 = '';
       let pdfPageCount = 0;
-      let conversionError = 'DOCX conversion failed. Please make sure LibreOffice and Java are installed and try again.';
+      let conversionError = 'DOCX conversion failed. Please make sure LibreOffice is installed and try again.';
       const converterBaseUrl = import.meta.env.VITE_DOCX_CONVERTER_URL?.replace(/\/$/, '');
 
       // Convert DOC/DOCX to PDF before extracting text or continuing the scan.
@@ -85,24 +82,6 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
       }
 
       if (!convertedPdfBase64) {
-        if (fileExt === 'docx' && docxTextFallback.length >= 30) {
-          const words = docxTextFallback.trim().split(/\s+/).filter(Boolean).length;
-          if (words > 30000) {
-            throw new Error(`File exceeds the maximum limit of 30,000 words (detected ${words.toLocaleString()} words). Please upload a document with 30,000 words or fewer.`);
-          }
-
-          return {
-            text: docxTextFallback,
-            fileData: base64Data,
-            fileMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            sourceFileData: base64Data,
-            sourceFileMimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            sourceFileSize: file.size,
-            pageCount: Math.max(1, Math.ceil(words / 320)),
-            wordCount: words,
-          };
-        }
-
         throw new Error(`Original DOCX page conversion failed: ${conversionError}`);
       }
 
@@ -134,24 +113,6 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
         }
 
         if (!extractedText || extractedText.length < 30) {
-          if (fileExt === 'docx' && docxTextFallback.length >= 30) {
-            const words = docxTextFallback.trim().split(/\s+/).filter(Boolean).length;
-            if (words > 30000) {
-              throw new Error(`File exceeds the maximum limit of 30,000 words (detected ${words.toLocaleString()} words). Please upload a document with 30,000 words or fewer.`);
-            }
-
-            return {
-              text: docxTextFallback,
-              fileData: base64Data,
-              fileMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-              sourceFileData: base64Data,
-              sourceFileMimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-              sourceFileSize: file.size,
-              pageCount: Math.max(1, Math.ceil(words / 320)),
-              wordCount: words,
-            };
-          }
-
           throw new Error('LibreOffice converted the DOCX to PDF, but the resulting PDF did not contain enough readable text to scan.');
         }
 
