@@ -115,6 +115,7 @@ export const AdminPanel: React.FC = () => {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [editName, setEditName] = useState<string>('');
   const [editCredits, setEditCredits] = useState<number>(0);
+  const [changeEditCredits, setChangeEditCredits] = useState(false);
   const [editPlan, setEditPlan] = useState<string>('');
   const [editExpiry, setEditExpiry] = useState<string>('');
   const [isSavingUser, setIsSavingUser] = useState<boolean>(false);
@@ -793,6 +794,7 @@ export const AdminPanel: React.FC = () => {
                               setEditingUser(u);
                               setEditName(u.name);
                               setEditCredits(u.credits);
+                              setChangeEditCredits(false);
                               setEditPlan(u.planName || 'Standard Verified Plan');
                               setEditExpiry(u.planExpiry || '2027-12-31');
                             }}
@@ -1499,12 +1501,13 @@ export const AdminPanel: React.FC = () => {
                 e.preventDefault();
                 setIsSavingUser(true);
                 try {
-                  const success = await updateUserAsAdmin(editingUser.id, {
+                  const updates: Partial<User> = {
                     name: editName.trim() || editingUser.name,
-                    credits: Math.max(0, editCredits),
                     planName: editPlan,
                     planExpiry: editExpiry,
-                  });
+                  };
+                  if (changeEditCredits) updates.credits = Math.max(0, editCredits);
+                  const success = await updateUserAsAdmin(editingUser.id, updates, editingUser.credits);
                   if (success) {
                     setEditingUser(null);
                   }
@@ -1541,8 +1544,14 @@ export const AdminPanel: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    Credit Balance
+                  <label className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={changeEditCredits}
+                      onChange={event => setChangeEditCredits(event.target.checked)}
+                      className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-amber-500 focus:ring-amber-500"
+                    />
+                    Change credit balance
                   </label>
                   <input
                     type="number"
@@ -1550,7 +1559,8 @@ export const AdminPanel: React.FC = () => {
                     max="50000"
                     value={editCredits}
                     onChange={e => setEditCredits(parseInt(e.target.value) || 0)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
+                    disabled={!changeEditCredits}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
                   />
                 </div>
 

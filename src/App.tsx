@@ -13,8 +13,8 @@ import { OriginalityCheckLogo } from './components/OriginalityCheckLogo';
 import { ToastNotificationBanner } from './components/ToastNotificationBanner';
 import { CheckCircle2, AlertCircle, Info, Loader2 } from 'lucide-react';
 
-const IDLE_TIMEOUT_MS = 2 * 60 * 1000;
-const IDLE_WARNING_MS = 30 * 1000;
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const IDLE_WARNING_MS = 60 * 1000;
 const ACTIVITY_STORAGE_PREFIX = 'turnitscope:last-activity:';
 const THEME_STORAGE_KEY = 'turnitscope:theme';
 
@@ -164,7 +164,7 @@ const AppContent: React.FC = () => {
           role="alert"
           aria-live="assertive"
         >
-          <span className="text-xs font-semibold">You’ll be signed out in about 30 seconds due to inactivity.</span>
+          <span className="text-xs font-semibold">You’ll be signed out in about one minute due to inactivity.</span>
           <button
             type="button"
             onClick={() => {
