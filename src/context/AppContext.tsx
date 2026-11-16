@@ -2522,7 +2522,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setScanProgress({ step: 'Checking text with TruthScan...', percent: 60 });
 
           // Route through the app server to TruthScan; keep the API key server-side.
-          const apiBase = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
+          const apiBase = (
+            import.meta.env.VITE_API_URL
+            ?? import.meta.env.VITE_DOCX_CONVERTER_URL
+            ?? ''
+          ).replace(/\/$/, '');
           const response = await fetch(`${apiBase}/api/ai-detect`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
