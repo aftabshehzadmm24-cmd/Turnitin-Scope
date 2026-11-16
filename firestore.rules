@@ -28,7 +28,7 @@ service cloud.firestore {
 
     function isValidScanDebit() {
       let debit = resource.data.get('credits', 0) - request.resource.data.get('credits', 0);
-      return debit in [2, 3, 5]
+      return debit == 1
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['credits', 'usedCredits', 'totalScans'])
         && request.resource.data.get('usedCredits', 0) == resource.data.get('usedCredits', 0) + debit
         && request.resource.data.get('totalScans', 0) == resource.data.get('totalScans', 0) + 1

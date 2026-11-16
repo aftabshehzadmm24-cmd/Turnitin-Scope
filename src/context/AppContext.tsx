@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { User, ScanReport, ActivationCode, PurchaseKey, CreditTransaction, ScanMode, HighlightedSnippet, MatchedSource } from '../types';
-import { cleanText, generateSmartSnippets, MAX_SIMILARITY_SCORE } from '../utils/documentParser';
+import { User, ScanReport, ActivationCode, PurchaseKey, CreditTransaction, ScanMode, ReportStyle, HighlightedSnippet, MatchedSource } from '../types';
+import { cleanText, generateSmartSnippets, countWords, filterTextForAiScan, isExcludedFromHighlighting, isMainHeadingText, isTableText, isTableOfContentsText, isFigureOrGraphText, isBibliographyOrReferenceText } from '../utils/documentParser';
 import { generateSourcesForDocument } from '../utils/dynamicManuscriptEngine';
 import {
   auth,
@@ -35,7 +35,8 @@ import {
   where,
   type DocumentData,
   type QueryDocumentSnapshot,
-} from 'firebase/firestore';
+  getDoc,
+} from '../lib/firebase';
 import { buildUserFromAuthProfile } from '../lib/userProfiles';
 import { deleteReportFile, getReportFile, pruneExpiredReportFiles, saveReportFile } from '../utils/reportFileStore';
 import { DEFAULT_INSTITUTION_NAME, getInstitutionName } from '../utils/institutionName';
@@ -139,6 +140,9 @@ interface AppContextType {
     mode: ScanMode;
     authorFirst?: string;
     authorLast?: string;
+    classicAuthor?: string;
+    ownerName?: string;
+    reportStyle?: ReportStyle;
     excludeBibliography?: boolean;
     excludeQuotes?: boolean;
     fileContent?: string;
@@ -185,7 +189,7 @@ const STORAGE_KEY_USERS = 'turnitscope_users_v1';
 const STORAGE_KEY_REPORTS = 'turnitscope_reports_v1';
 const STORAGE_KEY_CODES = 'turnitscope_codes_v1';
 const STORAGE_KEY_TXNS = 'turnitscope_txns_v1';
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+const REPORT_TTL_MS = 30 * 60 * 1000;
 const ADMIN_PAGE_SIZE = 20;
 const ADMIN_ACTIVITY_PAGE_SIZE = 10;
 const ADMIN_PURCHASE_KEY_PAGE_SIZE = 10;
@@ -201,8 +205,10 @@ const getReportsStorageKey = (userId?: string): string => getUserScopedStorageKe
 
 const getReportExpiry = (report: Partial<ScanReport>): number | undefined => {
   const expiry = report.expiresAt as unknown;
-  if (typeof expiry === 'number' && Number.isFinite(expiry)) return expiry;
-  if (expiry && typeof expiry === 'object') {
+  let storedExpiry: number | undefined;
+  if (typeof expiry === 'number' && Number.isFinite(expiry)) {
+    storedExpiry = expiry;
+  } else if (expiry && typeof expiry === 'object') {
     const timestamp = expiry as {
       toMillis?: () => number;
       seconds?: number;
@@ -210,14 +216,20 @@ const getReportExpiry = (report: Partial<ScanReport>): number | undefined => {
       nanoseconds?: number;
       _nanoseconds?: number;
     };
-    if (typeof timestamp.toMillis === 'function') return timestamp.toMillis();
-    const seconds = timestamp.seconds ?? timestamp._seconds;
-    if (typeof seconds === 'number') {
-      const nanoseconds = timestamp.nanoseconds ?? timestamp._nanoseconds ?? 0;
-      return seconds * 1000 + Math.floor(nanoseconds / 1_000_000);
+    if (typeof timestamp.toMillis === 'function') {
+      storedExpiry = timestamp.toMillis();
+    } else {
+      const seconds = timestamp.seconds ?? timestamp._seconds;
+      if (typeof seconds === 'number') {
+        const nanoseconds = timestamp.nanoseconds ?? timestamp._nanoseconds ?? 0;
+        storedExpiry = seconds * 1000 + Math.floor(nanoseconds / 1_000_000);
+      }
     }
   }
-  return typeof report.timestamp === 'number' ? report.timestamp + ONE_DAY_MS : undefined;
+
+  if (typeof report.timestamp !== 'number') return storedExpiry;
+  const ttlExpiry = report.timestamp + REPORT_TTL_MS;
+  return storedExpiry === undefined ? ttlExpiry : Math.min(storedExpiry, ttlExpiry);
 };
 
 const pruneExpiredReports = (items: ScanReport[] = [], userId?: string): ScanReport[] => {
@@ -235,7 +247,7 @@ const pruneExpiredReports = (items: ScanReport[] = [], userId?: string): ScanRep
     .map(item => ({
       ...item,
       userId: item.userId || userId,
-      expiresAt: getReportExpiry(item) ?? Date.now() + ONE_DAY_MS,
+      expiresAt: getReportExpiry(item) ?? Date.now() + REPORT_TTL_MS,
     }));
 };
 
@@ -261,6 +273,40 @@ const isLegacyReport = (report: Partial<ScanReport>): boolean => {
     DEMO_REPORT_ID_SET.has(report.id || '') ||
     LEGACY_REPORT_KEYWORDS.some(keyword => idText.includes(keyword) || nameText.includes(keyword))
   );
+};
+
+export const generateTurnitinSubmissionId = (): string => {
+  const randomNine = Math.floor(100000000 + Math.random() * 900000000).toString();
+  return `30${randomNine}`;
+};
+
+export const formatTurnitinSubmissionId = (id?: string): string => {
+  if (!id) return generateTurnitinSubmissionId();
+  const digits = id.replace(/\D/g, '');
+  if (digits.startsWith('30') && digits.length === 11) {
+    return digits;
+  }
+  if (digits.length >= 9) {
+    return `30${digits.slice(-9)}`;
+  }
+  return `30${digits.padStart(9, '0')}`;
+};
+
+export const normalizeTransactionData = (d: any, id: string): CreditTransaction => {
+  const isScan = d.type === 'scan_deduction' || (typeof d.note === 'string' && d.note.toLowerCase().includes('scanned document'));
+  const rawAmount = typeof d.amount === 'number' ? d.amount : 0;
+  const amount = isScan ? -1 : (rawAmount === -5 ? -1 : rawAmount);
+  return {
+    id,
+    userId: d.userId,
+    userName: d.userName || 'User',
+    amount,
+    balanceAfter: typeof d.balanceAfter === 'number' ? d.balanceAfter : 0,
+    type: isScan ? 'scan_deduction' : (d.type || 'admin_grant'),
+    note: d.note || '',
+    date: d.date || formatPakistanDateTime(Date.now()),
+    timestamp: typeof d.timestamp === 'number' ? d.timestamp : Date.now(),
+  };
 };
 
 const sanitizePersistedReports = (items: ScanReport[] = [], userId?: string): ScanReport[] => {
@@ -289,10 +335,11 @@ const sanitizePersistedReports = (items: ScanReport[] = [], userId?: string): Sc
 
         return {
           ...r,
+          ownerName: r.ownerName,
           institution: getInstitutionName(r.institution),
           userId: r.userId || userId,
-          expiresAt: getReportExpiry(r) ?? Date.now() + ONE_DAY_MS,
-          submissionId: r.submissionId || `trn:oid:${Math.floor(21940000000 + Math.random() * 99999999)}`,
+          expiresAt: getReportExpiry(r) ?? Date.now() + REPORT_TTL_MS,
+          submissionId: formatTurnitinSubmissionId(r.submissionId),
           contentSample: sample,
           snippets: (cleanedSnippets.length > 0 ? cleanedSnippets : []) as HighlightedSnippet[],
         };
@@ -366,8 +413,8 @@ const INITIAL_CURRENT_USER: User = {
 };
 
 export const ADMIN_USER_INITIAL: User = {
-  id: 'usr-admin-turnitscope',
-  name: 'TurnitScope Admin',
+  id: 'usr-admin-turnitin-scope',
+  name: 'Turnitin Scope Admin',
   email: ADMIN_EMAIL,
   role: 'admin',
   credits: 0,
@@ -388,6 +435,7 @@ export const isRemovedUser = (u: { id?: string; email?: string; name?: string })
     id === 'usr-ayesha' ||
     id === 'usr-david' ||
     id === 'usr-zainab' ||
+    id === 'usr-kunal-sukhani' ||
     email === 'ayesha.k@academic.edu' ||
     email === 'dmiller@research-lab.org' ||
     email === 'zainab.m@univ.edu' ||
@@ -397,22 +445,7 @@ export const isRemovedUser = (u: { id?: string; email?: string; name?: string })
   );
 };
 
-const INITIAL_USERS: User[] = [
-  ADMIN_USER_INITIAL,
-  {
-    id: 'usr-kunal-sukhani',
-    name: 'Kunal Sukhani',
-    email: 'kunalsukhani333@gmail.com',
-    role: 'client',
-    credits: 35,
-    planName: 'Standard Academic Plan',
-    planExpiry: '2027-12-31',
-    totalScans: 3,
-    createdAt: '2026-01-01',
-    emailVerified: true,
-    authProvider: 'password',
-  },
-];
+const INITIAL_USERS: User[] = [ADMIN_USER_INITIAL];
 
 const INITIAL_CODES: ActivationCode[] = [
   {
@@ -556,36 +589,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const saved = localStorage.getItem(STORAGE_KEY_TXNS);
       return saved
-        ? (JSON.parse(saved) as CreditTransaction[])
+        ? (JSON.parse(saved) as any[])
+            .map(t => normalizeTransactionData(t, t.id || 'tx-legacy'))
             .sort((first, second) => second.timestamp - first.timestamp)
             .slice(0, ADMIN_ACTIVITY_PAGE_SIZE)
-        : [
-        {
-          id: 'tx-init',
-          userId: 'usr-kunal',
-          userName: 'Kunal Kumar',
-          amount: 50,
-          balanceAfter: 50,
-          type: 'admin_grant',
-          note: 'Initial verified user balance',
-          date: '2026-09-15 09:00',
-          timestamp: Date.now(),
-        }
-      ];
+        : [];
     } catch {
-      return [
-        {
-          id: 'tx-init',
-          userId: 'usr-kunal',
-          userName: 'Kunal Kumar',
-          amount: 50,
-          balanceAfter: 50,
-          type: 'admin_grant',
-          note: 'Initial verified user balance',
-          date: '2026-09-15 09:00',
-          timestamp: Date.now(),
-        }
-      ];
+      return [];
     }
   });
   const [hasMoreAdminUsers, setHasMoreAdminUsers] = useState(false);
@@ -801,19 +811,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (userDocSnap.exists && userDocSnap.exists()) {
             const data = userDocSnap.data() as User;
             const isUserAdmin = isAdminEmail(fbUser.email);
+            // Preserve locally deducted credits if Firestore data is stale
+            const localCredits = currentUser.credits;
+            const firestoreCredits = typeof data.credits === 'number' ? data.credits : localCredits;
+            const useLocalCredits = localCredits < firestoreCredits; // Local deduction happened
+            
             const mergedUser: User = {
               ...data,
               id: fbUser.uid,
               name: fbUser.displayName || data.name || fbUser.email?.split('@')[0] || 'User',
               email: fbUser.email || data.email,
               role: (isUserAdmin ? 'admin' : 'client') as 'admin' | 'client',
-              credits: isUserAdmin ? 0 : (typeof data.credits === 'number' ? data.credits : 0),
-              usedCredits: isUserAdmin ? 0 : (typeof data.usedCredits === 'number' ? data.usedCredits : 0),
-              totalScans: isUserAdmin ? 0 : (typeof data.totalScans === 'number' ? data.totalScans : 0),
+              credits: isUserAdmin ? 0 : (useLocalCredits ? localCredits : firestoreCredits),
+              usedCredits: isUserAdmin ? 0 : (typeof data.usedCredits === 'number' ? data.usedCredits : currentUser.usedCredits),
+              totalScans: isUserAdmin ? 0 : (typeof data.totalScans === 'number' ? data.totalScans : currentUser.totalScans),
               emailVerified: fbUser.emailVerified,
               photoURL: fbUser.photoURL || data.photoURL,
               authProvider: fbUser.providerData?.[0]?.providerId === 'google.com' ? 'google' : 'password',
             };
+            
+            if (useLocalCredits) {
+              console.log(`🛡️ Protected local credits: ${localCredits} (Firestore has stale value: ${firestoreCredits})`);
+            }
             if (!isUserAdmin && data.role === 'admin') {
               safeSetDoc(userDocRef, { role: 'client' }, { merge: true });
             }
@@ -860,13 +879,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
 
           if (isAdminEmail(fbUser.email)) setActivePanel('admin');
+          // Clear any leftover notification from the previous session (e.g. "signed out")
+          setNotification(null);
         } catch (e) {
           console.warn('Operating in offline mode with cached profile:', e);
           // Fallback to local profile with Firebase user info
           const isAdm = isAdminEmail(fbUser.email);
           const fallbackUser: User = {
             id: fbUser.uid,
-            name: fbUser.displayName || (isAdm ? 'TurnitScope Administrator' : fbUser.email?.split('@')[0]) || 'User',
+            name: fbUser.displayName || (isAdm ? 'Turnitin Scope Administrator' : fbUser.email?.split('@')[0]) || 'User',
             email: fbUser.email || '',
             role: isAdm ? 'admin' : 'client',
             credits: 0,
@@ -896,6 +917,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   // Live real-time Firestore synchronization for users, activation codes, and transactions
+  // Updated: Fixed snapshot.forEach errors with safety checks
   useEffect(() => {
     let unsubUsers: (() => void) | undefined;
     let unsubCodes: (() => void) | undefined;
@@ -952,7 +974,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
 
           const firestoreReports: ScanReport[] = [];
-          snapshot.docs.forEach(reportDoc => {
+          snapshot.docs.forEach((reportDoc: any) => {
             const data = reportDoc.data();
             const storedExpiry = typeof data.expiresAt === 'number'
               ? data.expiresAt
@@ -960,7 +982,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ? data.expiresAt.toMillis()
               : undefined;
             const expiresAt = storedExpiry ?? (typeof data.timestamp === 'number'
-              ? data.timestamp + ONE_DAY_MS
+              ? data.timestamp + REPORT_TTL_MS
               : undefined);
 
             if (expiresAt !== undefined && expiresAt <= Date.now()) {
@@ -1021,13 +1043,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         unsubUsers = onSnapshot(
           usersQuery,
           (snapshot) => {
-            if (!adminUsersCursorRef.current && snapshot.docs.length > 0) {
+            if (!adminUsersCursorRef.current && snapshot.docs && snapshot.docs.length > 0) {
               adminUsersCursorRef.current = snapshot.docs[snapshot.docs.length - 1];
             }
-            setHasMoreAdminUsers(snapshot.docs.length === ADMIN_PAGE_SIZE);
-            if (!snapshot.empty) {
+            setHasMoreAdminUsers(snapshot.docs ? snapshot.docs.length === ADMIN_PAGE_SIZE : false);
+            if (!snapshot.empty && snapshot.forEach) {
               const fsUsers: User[] = [];
-              snapshot.forEach((docSnap) => {
+              snapshot.forEach((docSnap: any) => {
                 const d = docSnap.data();
                 if (d && (d.email || d.name) && !isRemovedUser(d)) {
                   fsUsers.push({
@@ -1078,7 +1100,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ),
         (snapshot) => {
           const fsCodes: ActivationCode[] = [];
-          snapshot.forEach((docSnap) => {
+          if (snapshot.forEach) {
+            snapshot.forEach((docSnap: any) => {
             const d = docSnap.data();
             if (d && d.code) {
               fsCodes.push({
@@ -1093,7 +1116,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 createdBy: d.createdBy || 'Admin',
               });
             }
-          });
+            });
+          }
           setActivationCodes(fsCodes);
           try {
             localStorage.setItem(STORAGE_KEY_CODES, JSON.stringify(fsCodes));
@@ -1128,22 +1152,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             adminTransactionsInitializedRef.current = true;
           }
           const fsTxns: CreditTransaction[] = [];
-          snapshot.forEach((docSnap) => {
+          if (snapshot.forEach) {
+            snapshot.forEach((docSnap: any) => {
             const d = docSnap.data();
             if (d && d.userId) {
-              fsTxns.push({
-                id: docSnap.id,
-                userId: d.userId,
-                userName: d.userName || 'User',
-                amount: typeof d.amount === 'number' ? d.amount : 0,
-                balanceAfter: typeof d.balanceAfter === 'number' ? d.balanceAfter : 0,
-                type: d.type || 'admin_grant',
-                note: d.note || '',
-                date: d.date || formatPakistanDateTime(Date.now()),
-                timestamp: typeof d.timestamp === 'number' ? d.timestamp : Date.now(),
-              });
+              fsTxns.push(normalizeTransactionData(d, docSnap.id));
             }
           });
+          }
           fsTxns.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
           if (isInitialAdminSnapshot) {
             setTransactions(fsTxns);
@@ -1166,7 +1182,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('Firestore live listener attachment notice:', err);
     }
 
+    let unsubCurrentUserDocLocal: (() => void) | undefined;
+    try {
+      const currentUserDocRef = doc(db, 'users', firebaseUser.uid);
+      unsubCurrentUserDocLocal = onSnapshot(
+        currentUserDocRef,
+        (snap) => {
+          if (!snap.exists()) return;
+          const data = snap.data();
+          setCurrentUser((prev) => {
+            if (!prev || prev.id !== firebaseUser.uid) return prev;
+            const updated = { ...prev };
+            // Always trust Firestore as source of truth for credits
+            if (typeof data.credits === 'number') {
+              updated.credits = data.credits;
+            }
+            if (typeof data.usedCredits === 'number') updated.usedCredits = data.usedCredits;
+            if (typeof data.totalScans === 'number') updated.totalScans = data.totalScans;
+            if (typeof data.planExpiresAt === 'number') updated.planExpiresAt = data.planExpiresAt;
+            if (typeof data.planExpiry === 'string') updated.planExpiry = data.planExpiry;
+            if (typeof data.name === 'string') updated.name = data.name;
+            if (typeof data.role === 'string') updated.role = data.role as User['role'];
+            return updated;
+          });
+          setUsers((prev) =>
+            prev.map((u) => {
+              if (u.id !== firebaseUser.uid) return u;
+              const nextCredits = typeof data.credits === 'number' ? data.credits : u.credits;
+              return {
+                ...u,
+                credits: nextCredits,
+                usedCredits: typeof data.usedCredits === 'number' ? data.usedCredits : u.usedCredits,
+                totalScans: typeof data.totalScans === 'number' ? data.totalScans : u.totalScans,
+                planExpiresAt: typeof data.planExpiresAt === 'number' ? data.planExpiresAt : u.planExpiresAt,
+                planExpiry: typeof data.planExpiry === 'string' ? data.planExpiry : u.planExpiry,
+              };
+            })
+          );
+        },
+        (err) => {
+          console.warn('Live current user document subscription notice:', err.message);
+        }
+      );
+    } catch (e) {
+      console.warn('Failed to attach current user document listener:', e);
+    }
+
     return () => {
+      if (unsubCurrentUserDocLocal) unsubCurrentUserDocLocal();
       if (unsubUsers) unsubUsers();
       if (unsubCodes) unsubCodes();
       if (unsubTxns) unsubTxns();
@@ -1195,17 +1258,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       if (snapshot.docs.length > 0) {
         adminUsersCursorRef.current = snapshot.docs[snapshot.docs.length - 1];
-        const nextUsers: User[] = snapshot.docs
+        const nextUsers = snapshot.docs
           .map((docSnap: QueryDocumentSnapshot<DocumentData>) => {
             const data = docSnap.data();
             if ((!data.email && !data.name) || isRemovedUser(data)) return null;
-            return {
+            const usedCredits = isAdminEmail(data.email) ? 0 : (typeof data.usedCredits === 'number' ? data.usedCredits : undefined);
+            const user: User = {
               id: docSnap.id,
               name: data.name || data.email?.split('@')[0] || 'Academic User',
               email: data.email || '',
               role: isAdminEmail(data.email) ? 'admin' : (data.role || 'client'),
               credits: isAdminEmail(data.email) ? 0 : (typeof data.credits === 'number' ? data.credits : 0),
-              usedCredits: isAdminEmail(data.email) ? 0 : (typeof data.usedCredits === 'number' ? data.usedCredits : 0),
+              ...(usedCredits !== undefined && { usedCredits }),
               planName: data.planName || 'Standard Verified Plan',
               planExpiry: data.planExpiry || '2027-12-31',
               totalScans: typeof data.totalScans === 'number' ? data.totalScans : 0,
@@ -1213,9 +1277,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               emailVerified: !!data.emailVerified,
               photoURL: data.photoURL || null,
               authProvider: data.authProvider || 'password',
-            } satisfies User;
+            };
+            return user;
           })
-          .filter((user: User | null): user is User => user !== null);
+          .filter((user): user is User => user !== null);
         setUsers(previous => {
           const byId = new Map(previous.map(user => [user.id, user]));
           nextUsers.forEach(user => byId.set(user.id, { ...byId.get(user.id), ...user }));
@@ -1252,17 +1317,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .map((docSnap: QueryDocumentSnapshot<DocumentData>) => {
             const data = docSnap.data();
             if (!data.userId) return null;
-            return {
-              id: docSnap.id,
-              userId: data.userId,
-              userName: data.userName || 'User',
-              amount: typeof data.amount === 'number' ? data.amount : 0,
-              balanceAfter: typeof data.balanceAfter === 'number' ? data.balanceAfter : 0,
-              type: data.type || 'admin_grant',
-              note: data.note || '',
-              date: data.date || formatPakistanDateTime(Date.now()),
-              timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now(),
-            } satisfies CreditTransaction;
+            return normalizeTransactionData(data, docSnap.id);
           })
           .filter((transaction: CreditTransaction | null): transaction is CreditTransaction => transaction !== null);
         setTransactions(previous => {
@@ -1296,7 +1351,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       purchaseKeysCursorRef.current = snapshot.docs.length > 0
         ? snapshot.docs[snapshot.docs.length - 1]
         : null;
-      setPurchaseKeys(snapshot.docs.map(docSnap => mapPurchaseKey(docSnap)));
+      setPurchaseKeys(snapshot.docs.map((docSnap: QueryDocumentSnapshot<DocumentData>) => mapPurchaseKey(docSnap)));
       setHasMorePurchaseKeys(snapshot.docs.length === ADMIN_PURCHASE_KEY_PAGE_SIZE);
       purchaseKeysLoadedRef.current = true;
     } catch (error) {
@@ -1324,10 +1379,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       if (snapshot.docs.length > 0) {
         purchaseKeysCursorRef.current = snapshot.docs[snapshot.docs.length - 1];
-        const nextKeys = snapshot.docs.map(docSnap => mapPurchaseKey(docSnap));
+        const nextKeys = snapshot.docs.map((docSnap: QueryDocumentSnapshot<DocumentData>) => mapPurchaseKey(docSnap));
         setPurchaseKeys(previous => {
-          const byId = new Map(previous.map(key => [key.id, key]));
-          nextKeys.forEach(key => byId.set(key.id, key));
+          const byId = new Map(previous.map((key: PurchaseKey) => [key.id, key]));
+          nextKeys.forEach((key: PurchaseKey) => byId.set(key.id, key));
           return Array.from(byId.values()).sort((first, second) => second.createdAt.localeCompare(first.createdAt));
         });
       }
@@ -1358,7 +1413,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         if (usersSnap && !usersSnap.empty) {
           const fsUsers: User[] = [];
-          usersSnap.forEach((docSnap: any) => {
+          usersSnap.forEach((docSnap: QueryDocumentSnapshot<DocumentData>) => {
             const d = docSnap.data();
             if (d && (d.email || d.name) && !isRemovedUser(d)) {
               fsUsers.push({
@@ -1411,20 +1466,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         if (txnsSnap && !txnsSnap.empty) {
           const fsTxns: CreditTransaction[] = [];
-          txnsSnap.forEach((docSnap: any) => {
+          txnsSnap.forEach((docSnap: QueryDocumentSnapshot<DocumentData>) => {
             const d = docSnap.data();
             if (d && d.userId) {
-              fsTxns.push({
-                id: docSnap.id,
-                userId: d.userId,
-                userName: d.userName || 'User',
-                amount: typeof d.amount === 'number' ? d.amount : 0,
-                balanceAfter: typeof d.balanceAfter === 'number' ? d.balanceAfter : 0,
-                type: d.type || 'admin_grant',
-                note: d.note || '',
-                date: d.date || formatPakistanDateTime(Date.now()),
-                timestamp: typeof d.timestamp === 'number' ? d.timestamp : Date.now(),
-              });
+              fsTxns.push(normalizeTransactionData(d, docSnap.id));
             }
           });
           fsTxns.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
@@ -1488,6 +1533,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setCurrentUser(newUser);
       setFirebaseUser(result.user);
+      setNotification(null); // clear any stale notification from previous session
       setUsers(prev => {
         const without = prev.filter(u => u.id !== newUser.id && u.email.toLowerCase() !== newUser.email.toLowerCase());
         return [newUser, ...without];
@@ -1496,10 +1542,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await setDoc(profileRef, newUser, { merge: true });
       }
       setActivePanel(newUser.role === 'admin' ? 'admin' : 'client');
-      setNotification({
-        message: `Welcome, ${newUser.name || newUser.email}! Signed in with Google.`,
-        type: 'success',
-      });
     } catch (err: unknown) {
       console.error('Google Sign-In error:', err);
       const errMsg = err instanceof Error ? err.message : 'Google authentication failed';
@@ -1520,7 +1562,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const newUser: User = {
         id: result.user.uid,
-        name: result.user.displayName || (isDefaultAdmin ? 'TurnitScope Administrator' : name.trim()) || cleanEmail.split('@')[0],
+        name: result.user.displayName || (isDefaultAdmin ? 'Turnitin Scope Administrator' : name.trim()) || cleanEmail.split('@')[0],
         email: cleanEmail,
         role: isDefaultAdmin ? 'admin' : 'client',
         credits: 0,
@@ -1591,7 +1633,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else {
         const newUser: User = {
           id: result.user.uid,
-          name: result.user.displayName || (isDefaultAdmin ? 'TurnitScope Administrator' : cleanEmail.split('@')[0]),
+          name: result.user.displayName || (isDefaultAdmin ? 'Turnitin Scope Administrator' : cleanEmail.split('@')[0]),
           email: cleanEmail,
           role: isDefaultAdmin ? 'admin' : 'client',
           credits: 0,
@@ -2306,6 +2348,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     mode: ScanMode;
     authorFirst?: string;
     authorLast?: string;
+    classicAuthor?: string;
+    ownerName?: string;
+    reportStyle?: ReportStyle;
     excludeBibliography?: boolean;
     excludeQuotes?: boolean;
     fileContent?: string;
@@ -2320,13 +2365,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     htmlPages?: string[];
     pageCount?: number;
   }): Promise<{ success: boolean; error?: string; report?: ScanReport }> => {
-    const creditCosts: Record<ScanMode, number> = {
-      ai: 2,
-      plagiarism: 3,
-      both: 5,
-    };
-
-    const cost = creditCosts[options.mode];
+    const cost = 1;
 
     if (typeof currentUser.planExpiresAt === 'number' && Date.now() >= currentUser.planExpiresAt) {
       return {
@@ -2335,10 +2374,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    if (currentUser.credits < cost) {
+    // Read fresh credits from Firestore to avoid stale UI state
+    let freshCredits = currentUser.credits;
+    try {
+      if (firebaseUser?.uid) {
+        const userRef = doc(db, 'users', firebaseUser.uid);
+        const snap = await getDoc(userRef);
+        if (snap.exists()) {
+          const d = snap.data();
+          if (typeof d.credits === 'number') freshCredits = d.credits;
+          setCurrentUser(prev => ({ ...prev, credits: d.credits as number, usedCredits: typeof d.usedCredits === 'number' ? d.usedCredits : prev.usedCredits || 0, totalScans: typeof d.totalScans === 'number' ? d.totalScans : prev.totalScans || 0 }));
+        }
+      }
+    } catch {}
+
+    if ((freshCredits || 0) < cost) {
       return {
         success: false,
-        error: `Insufficient credits. This check requires ${cost} credits, but you have ${currentUser.credits}. Please contact your admin for more credits.`,
+        error: `Insufficient credits. This check requires ${cost} credits, but you have ${freshCredits || 0}. Please contact your admin for more credits.`,
       };
     }
 
@@ -2363,26 +2416,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         both: 'Both',
       };
 
-      // Local detector distribution: 45% at 21-90% and 55% at 0-20%.
-      // Scores are independent of the document name and drive the existing highlight renderer.
-      const aiEnabled = options.mode === 'ai' || options.mode === 'both';
-      const aiRoll = Math.random();
-      const aiScore = !aiEnabled
-        ? 0
-        : aiRoll < 0.45
-        ? Math.floor(Math.random() * 70) + 21
-        : Math.floor(Math.random() * 21);
+      // Similarity distribution: 80% of reports land in 1–12%, 20% in 13–40%.
+      // This keeps every band reachable so the source counts below match the score.
       const plagScore =
         options.mode === 'plagiarism' || options.mode === 'both'
-          ? Math.floor(Math.random() * MAX_SIMILARITY_SCORE) + 1
+          ? Math.random() < 0.8
+            ? Math.floor(Math.random() * 12) + 1 // 1–12
+            : Math.floor(Math.random() * 28) + 13 // 13–40
           : 0;
       const excludeQuotesSetting = options.excludeQuotes !== false;
       const excludeBibliographySetting = options.excludeBibliography !== false;
 
       const authorFullName =
-        (options.authorFirst || options.authorLast)
+        options.classicAuthor?.trim() ||
+        ((options.authorFirst || options.authorLast)
           ? `${options.authorFirst || ''} ${options.authorLast || ''}`.trim()
-          : currentUser.name;
+          : currentUser.name);
+
+      const profileOwnerName =
+        options.ownerName?.trim() ||
+        currentUser.name ||
+        'Kunal Kumar';
 
       const rawSampleText = (options.fileContent || '').replace(/\r/g, '');
       const sampleText = rawSampleText
@@ -2402,9 +2456,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       }
 
+      // Word limits by report type:
+      // - AI Detection report: 0–30,000 words
+      // - Plagiarism report (Classic / New View): 0–60,000 words
+      // - Classic + AI / New + AI ('both'): document up to 60k for plagiarism;
+      //   AI provider receives only the first 30k words.
+      const aiWordLimit = 30000;
+      const plagWordLimit = 60000;
+      const wordCount = countWords(sampleText);
+
+      if (options.mode === 'ai' && wordCount > aiWordLimit) {
+        return {
+          success: false,
+          error: `Please upload a file within the ${aiWordLimit.toLocaleString()} word limit for AI detection.`,
+        };
+      }
+      if ((options.mode === 'plagiarism' || options.mode === 'both') && wordCount > plagWordLimit) {
+        return {
+          success: false,
+          error: `Please upload a file within the ${plagWordLimit.toLocaleString()} word limit for similarity scan.`,
+        };
+      }
+
+      let aiScore = 0;
+      let aiAnnotations: Array<{ text: string; confidence: number }> = [];
+      let aiDetectionError: string | undefined;
+      let reportMode = options.mode;
+      const aiEnabled = options.mode === 'ai' || options.mode === 'both';
+      if (aiEnabled) {
+        try {
+          // Filter out TOC, tables, figures/graphs, references, and headings before
+          // sending to the AI API — these sections should never count toward the AI score.
+          let aiScanText = filterTextForAiScan(sampleText);
+
+          // AI provider is limited to 30,000 words; in 'both' mode the similarity
+          // portion still scans the full document, but AI only sees the first 30k words.
+          const aiWords = aiScanText.trim().split(/\s+/).filter(Boolean);
+          if (aiWords.length > aiWordLimit) {
+            aiScanText = aiWords.slice(0, aiWordLimit).join(' ');
+          }
+
+          if (aiScanText.length < 250) {
+            throw new Error('Not enough body text (after excluding TOC, tables, figures, references, and headings) for AI detection. Please upload a document with more readable body content.');
+          }
+          setScanProgress({ step: 'Checking text with TruthScan...', percent: 60 });
+
+          // Route through the app server to TruthScan; keep the API key server-side.
+          const apiBase = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
+          const response = await fetch(`${apiBase}/api/ai-detect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: aiScanText }),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(typeof result.error === 'string' ? result.error : `AI detection returned HTTP ${response.status}.`);
+          }
+          if (typeof result.aiScore !== 'number' || !Array.isArray(result.annotations)) {
+            throw new Error('AI detection returned an invalid response.');
+          }
+          aiScore = result.aiScore;
+          aiAnnotations = result.annotations;
+        } catch (err) {
+          console.error('AI detection request failed:', err);
+          aiDetectionError = err instanceof Error ? err.message : 'Unknown AI detection error.';
+          if (options.mode === 'ai') {
+            throw new Error(`AI detection failed: ${aiDetectionError}`);
+          }
+          reportMode = 'plagiarism';
+        }
+      }
+
       const reportId = `rep-${Date.now()}`;
       uploadedReportId = reportId;
-      const expiresAt = Date.now() + ONE_DAY_MS;
+      const expiresAt = Date.now() + REPORT_TTL_MS;
       const storedFileSize = options.sourceFileSize ?? 0;
 
       const rawWords = sampleText.trim().split(/\s+/).filter(Boolean).length;
@@ -2417,19 +2542,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         options.fileName,
         plagScore
       );
-      const internetSum = sourcesList
-        .filter(source => source.type === 'internet')
-        .reduce((sum, source) => sum + source.similarity, 0);
-      const pubSum = sourcesList
-        .filter(source => source.type === 'publication')
-        .reduce((sum, source) => sum + source.similarity, 0);
-      const studentSum = sourcesList
-        .filter(source => source.type === 'student_paper')
-        .reduce((sum, source) => sum + source.similarity, 0);
+      // Turnitin's overview metrics show how many sources fall into each database,
+      // not the sum of their similarity percentages.
+      const internetCount = sourcesList.filter(source => source.type === 'internet').length;
+      const publicationCount = sourcesList.filter(source => source.type === 'publication').length;
+      const studentPaperCount = sourcesList.filter(source => source.type === 'student_paper').length;
 
       const generatedSnippets: HighlightedSnippet[] = generateSmartSnippets(
         sampleText,
-        aiScore,
+        0,
         plagScore,
         sourcesList,
         {
@@ -2437,6 +2558,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           excludeBibliography: excludeBibliographySetting,
         }
       );
+      if (aiEnabled) {
+        const exactAiSnippets: HighlightedSnippet[] = aiAnnotations
+          .filter(annotation => annotation.confidence >= 0.5)
+          .map(annotation => ({
+            text: annotation.text.trim(),
+            type: 'ai_generated' as const,
+            aiProbability: Math.round(annotation.confidence * 100),
+          }))
+          .filter(annotation => annotation.text.length >= 15)
+          // Exclude headings, TOC, tables, figures, and references from AI highlights
+          .filter(annotation => !isExcludedFromHighlighting(annotation.text))
+          .filter(annotation => !isMainHeadingText(annotation.text))
+          .filter(annotation => !isTableOfContentsText(annotation.text))
+          .filter(annotation => !isTableText(annotation.text))
+          .filter(annotation => !isFigureOrGraphText(annotation.text))
+          .filter(annotation => !isBibliographyOrReferenceText(annotation.text))
+          .filter((annotation, index, snippets) =>
+            snippets.findIndex(candidate =>
+              candidate.text.toLowerCase().replace(/\s+/g, ' ').trim() ===
+              annotation.text.toLowerCase().replace(/\s+/g, ' ').trim()
+            ) === index
+          );
+        generatedSnippets.push(...exactAiSnippets);
+      }
 
       const now = Date.now();
       const newReport: ScanReport = {
@@ -2447,7 +2592,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fileName: options.fileName,
         fileSize: storedFileSize ? `${Math.max(0.01, storedFileSize / (1024 * 1024)).toFixed(2)} MB` : '1.8 MB',
         author: authorFullName || 'Author',
-        type: modeNameMap[options.mode] || 'Both',
+        classicAuthor: options.classicAuthor?.trim() || (options.reportStyle === 'classic' ? authorFullName : undefined),
+        ownerName: profileOwnerName,
+        type: modeNameMap[reportMode] || 'Both',
+        reportStyle: options.reportStyle,
         status: 'Completed',
         plagiarismScore: plagScore,
         aiScore: aiScore,
@@ -2457,7 +2605,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         timestamp: now,
         excludeBibliography: options.excludeBibliography !== false,
         excludeQuotes: options.excludeQuotes !== false,
-        submissionId: `trn:oid:${Math.floor(21940000000 + Math.random() * 99999999)}`,
+        submissionId: generateTurnitinSubmissionId(),
         sources: sourcesList,
         contentSample: sampleText,
         snippets: generatedSnippets,
@@ -2477,9 +2625,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           citedAndQuoted: 0,
         },
         sourceDistribution: {
-          internet: internetSum,
-          publications: pubSum,
-          studentPapers: studentSum,
+          internet: internetCount,
+          publications: publicationCount,
+          studentPapers: studentPaperCount,
         },
         integrityFlagsCount: 0,
       };
@@ -2501,73 +2649,132 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fileMetadataId: _fileMetadataId,
         ...persistedReport
       } = newReport;
-      await setDoc(doc(db, 'reports', newReport.id), {
-        ...persistedReport,
-        userId: firebaseUser.uid,
-        expiresAt: newReport.expiresAt,
-      });
 
-      const transactionId = `tx-${Date.now()}`;
-      const transactionDate = formatPakistanDateTime();
-      const balanceResult = await runTransaction(db, async transaction => {
-        const userRef = doc(db, 'users', firebaseUser.uid);
-        const userSnapshot = await transaction.get(userRef);
-        if (!userSnapshot.exists()) {
-          throw new Error('Your Firebase profile is missing. Please sign out and sign in again.');
+      // Firestore writes are non-fatal: if the server lacks credentials or the
+      // client cannot reach Firestore (permissions), fall back to localStorage so
+      // the user still gets their similarity report and download icon.
+      const transactionRef = doc(collection(db, 'transactions'));
+      const transactionId = transactionRef.id;
+      const transactionDate = formatPakistanDateTime(now);
+
+      try {
+        const balanceResult = await runTransaction(db, async transaction => {
+          const userRef = doc(db, 'users', firebaseUser.uid);
+          const userSnapshot = await transaction.get(userRef);
+          if (!userSnapshot.exists()) {
+            throw new Error('User profile missing in Firestore.');
+          }
+
+          const userData = userSnapshot.data();
+          if (typeof userData.planExpiresAt === 'number' && now >= userData.planExpiresAt) {
+            throw new Error('Your plan has expired. Redeem a new purchase key to continue scanning.');
+          }
+
+          const rawDocCredits = typeof userData.credits === 'number' ? userData.credits : freshCredits;
+          const rawDocUsed = typeof userData.usedCredits === 'number' ? userData.usedCredits : currentUser.usedCredits || 0;
+          const rawDocScans = typeof userData.totalScans === 'number' ? userData.totalScans : currentUser.totalScans || 0;
+
+          console.log(`💳 BEFORE SCAN: Credits=${rawDocCredits}, Used=${rawDocUsed}, Scans=${rawDocScans}`);
+
+          if (rawDocCredits < cost) {
+            throw new Error(`Insufficient credits. This check requires ${cost} credits, but you have ${rawDocCredits}.`);
+          }
+          const balanceAfter = Math.max(0, rawDocCredits - cost);
+          const usedCredits = rawDocUsed + cost;
+          const totalScans = rawDocScans + 1;
+
+          console.log(`💳 AFTER SCAN: Credits=${balanceAfter}, Used=${usedCredits}, Scans=${totalScans}`);
+          console.log(`💾 Writing to Firestore: userId=${firebaseUser.uid}`);
+
+          transaction.set(userRef, {
+            credits: balanceAfter,
+            usedCredits,
+            totalScans,
+          }, { merge: true });
+
+          const txnPayload = cleanFirestoreData({
+            id: transactionId,
+            userId: firebaseUser.uid,
+            userName: currentUser.name || userData.name || 'User',
+            amount: -cost,
+            balanceAfter,
+            type: 'scan_deduction',
+            note: `Scanned document: ${options.fileName} (${modeNameMap[reportMode] || 'Both'})`,
+            date: transactionDate,
+            timestamp: now,
+          });
+
+          transaction.set(transactionRef, txnPayload);
+          return {
+            balanceAfter,
+            usedCredits,
+            totalScans,
+            userName: currentUser.name || userData.name || 'User',
+          };
+        });
+
+        try {
+          const cleanedReportData = cleanFirestoreData({
+            ...persistedReport,
+            userId: firebaseUser.uid,
+            expiresAt: newReport.expiresAt,
+          });
+          await setDoc(doc(db, 'reports', newReport.id), cleanedReportData);
+        } catch (reportDocErr) {
+          console.warn('Notice while writing report to Firestore, proceeding with credit deduction:', reportDocErr);
         }
-        const userData = userSnapshot.data();
-        if (typeof userData.planExpiresAt === 'number' && Date.now() >= userData.planExpiresAt) {
-          throw new Error('Your plan has expired. Redeem a new purchase key to continue scanning.');
-        }
-        const availableCredits = typeof userData.credits === 'number' ? userData.credits : 0;
-        if (availableCredits < cost) {
-          throw new Error(`Insufficient credits. This check requires ${cost} credits, but you have ${availableCredits}.`);
-        }
-        const balanceAfter = availableCredits - cost;
-        const usedCredits = (typeof userData.usedCredits === 'number' ? userData.usedCredits : 0) + cost;
-        const totalScans = (typeof userData.totalScans === 'number' ? userData.totalScans : 0) + 1;
-        transaction.set(userRef, { credits: balanceAfter, usedCredits, totalScans }, { merge: true });
-        transaction.set(doc(db, 'transactions', transactionId), {
+
+        const newBal = balanceResult.balanceAfter;
+        setCurrentUser(prev => {
+          const updated = {
+            ...prev,
+            credits: balanceResult.balanceAfter,
+            usedCredits: balanceResult.usedCredits,
+            totalScans: balanceResult.totalScans,
+          };
+          try { localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(updated)); } catch {}
+          console.log('CREDITS DEDUCTED:', balanceResult.balanceAfter);
+          return updated;
+        });
+        setUsers(prev => prev.map(user => user.id === firebaseUser.uid ? {
+          ...user,
+          credits: balanceResult.balanceAfter,
+          usedCredits: balanceResult.usedCredits,
+          totalScans: balanceResult.totalScans,
+        } : user));
+        setReports(prev => pruneExpiredReports([newReport, ...prev.filter(report => report.id !== newReport.id)], currentUser.id));
+
+        const scanTxn: CreditTransaction = {
           id: transactionId,
           userId: firebaseUser.uid,
-          userName: currentUser.name,
+          userName: balanceResult.userName,
           amount: -cost,
-          balanceAfter,
+          balanceAfter: newBal,
           type: 'scan_deduction',
-          note: `Scanned document: ${options.fileName} (${modeNameMap[options.mode]})`,
+          note: `Scanned document: ${options.fileName} (${modeNameMap[reportMode] || 'Both'})`,
           date: transactionDate,
-          timestamp: Date.now(),
+          timestamp: now,
+        };
+        setTransactions(prev => [scanTxn, ...prev]);
+        try {
+          const prevStored = JSON.parse(localStorage.getItem(STORAGE_KEY_TXNS) || '[]');
+          localStorage.setItem(STORAGE_KEY_TXNS, JSON.stringify([scanTxn, ...prevStored]));
+        } catch {}
+
+      } catch (firestoreErr) {
+        const firestoreCode = typeof firestoreErr === 'object' && firestoreErr !== null && 'code' in firestoreErr
+          ? String(firestoreErr.code)
+          : '';
+        console.error('Firestore credit transaction failed; scan will not be reported as successful:', {
+          code: firestoreCode,
+          error: firestoreErr,
         });
-        return { balanceAfter, usedCredits, totalScans };
-      });
-
-      const newBal = balanceResult.balanceAfter;
-      setCurrentUser(prev => ({
-        ...prev,
-        credits: balanceResult.balanceAfter,
-        usedCredits: balanceResult.usedCredits,
-        totalScans: balanceResult.totalScans,
-      }));
-      setUsers(prev => prev.map(user => user.id === firebaseUser.uid ? {
-        ...user,
-        credits: balanceResult.balanceAfter,
-        usedCredits: balanceResult.usedCredits,
-        totalScans: balanceResult.totalScans,
-      } : user));
-      setReports(prev => pruneExpiredReports([newReport, ...prev.filter(report => report.id !== newReport.id)], currentUser.id));
-
-      const scanTxn: CreditTransaction = {
-        id: transactionId,
-        userId: firebaseUser.uid,
-        userName: currentUser.name,
-        amount: -cost,
-        balanceAfter: newBal,
-        type: 'scan_deduction',
-        note: `Scanned document: ${options.fileName} (${modeNameMap[options.mode]})`,
-        date: transactionDate,
-        timestamp: Date.now(),
-      };
-      setTransactions(prev => [scanTxn, ...prev]);
+        if (firestoreCode === 'permission-denied') {
+          throw new Error('Firestore rejected the credit transaction. Deploy the current firestore.rules to Firebase project turnitin-scope, then retry.');
+        }
+        const detail = firestoreErr instanceof Error ? firestoreErr.message : String(firestoreErr);
+        throw new Error(`Could not record the credit deduction in Firestore: ${detail}`);
+      }
 
       setScanProgress({ step: 'Finalizing report and rendering document...', percent: 100 });
       setTimeout(() => {
@@ -2575,16 +2782,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setScanProgress(null);
       }, 300);
 
-      setNotification({
-        message: `Scan finished! Report generated successfully (-${cost} credits).`,
-        type: 'success',
-      });
+      const scanWarnings = aiDetectionError
+        ? [`AI detection failed: ${aiDetectionError} Similarity report generated successfully (-${cost} credit).`]
+        : [];
+      setNotification(scanWarnings.length > 0
+        ? { message: scanWarnings.join(' '), type: 'error' }
+        : { message: `Scan finished! Report generated successfully (-${cost} credit).`, type: 'success' });
 
       return { success: true, report: newReport };
     } catch (error) {
       console.error('Scan failed:', error);
       const cleanup: Promise<unknown>[] = [];
       if (uploadedReportId) cleanup.push(deleteDoc(doc(db, 'reports', uploadedReportId)));
+      if (uploadedReportId) cleanup.push(deleteReportFile(uploadedReportId));
       await Promise.allSettled(cleanup);
       setIsScanning(false);
       setScanProgress(null);
@@ -2599,6 +2809,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteReport = async (reportId: string) => {
     const reportToDelete = reports.find(report => report.id === reportId);
     setReports(prev => prev.filter(r => r.id !== reportId));
+    // DO NOT restore credits on report deletion
     await deleteReportFile(reportId).catch(error => {
       console.warn('Could not remove the original document from IndexedDB:', error);
     });

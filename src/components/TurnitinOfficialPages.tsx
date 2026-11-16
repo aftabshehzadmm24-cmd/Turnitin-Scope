@@ -131,14 +131,15 @@ export const TurnitinPageHeader: React.FC<{
   sectionTitle: string;
   submissionId: string;
   mode?: 'ai' | 'similarity';
-}> = ({ pageNumber, totalPages, sectionTitle, submissionId, mode }) => {
+  compact?: boolean;
+}> = ({ pageNumber, totalPages, sectionTitle, submissionId, mode, compact = false }) => {
   const hideDivider = mode
     ? (mode === 'ai' ? pageNumber >= 3 : pageNumber >= 4)
     : false;
 
   return (
     <div
-      className="flex items-center justify-between text-[11px] text-slate-700 font-sans px-1 shrink-0 select-text"
+      className={`flex items-center justify-between ${compact ? 'text-[8px]' : 'text-[11px]'} text-slate-700 font-sans px-1 shrink-0 select-text`}
       style={{
         borderBottom: hideDivider ? 'none' : '1px solid rgb(241 245 249)',
         paddingBottom: hideDivider ? 0 : 10,
@@ -147,12 +148,12 @@ export const TurnitinPageHeader: React.FC<{
     >
       <div className="flex items-center gap-6">
         <TurnitinLogoWithText size="sm" />
-        <span className="text-slate-600 font-medium">
+        <span className={`text-slate-600 ${compact ? 'font-normal' : 'font-medium'}`}>
           Page {pageNumber} of {totalPages} - {sectionTitle}
         </span>
       </div>
-      <div className="text-slate-600 font-mono text-[10.5px]">
-        Submission ID <span className="font-semibold">{submissionId}</span>
+      <div className={`text-slate-600 ${compact ? 'font-sans text-[7.5px]' : 'font-mono text-[10.5px]'}`}>
+        Submission ID <span className={compact ? 'font-normal' : 'font-semibold'}>{submissionId}</span>
       </div>
     </div>
   );
@@ -167,14 +168,15 @@ export const TurnitinPageFooter: React.FC<{
   sectionTitle: string;
   submissionId: string;
   mode?: 'ai' | 'similarity';
-}> = ({ pageNumber, totalPages, sectionTitle, submissionId, mode }) => {
+  compact?: boolean;
+}> = ({ pageNumber, totalPages, sectionTitle, submissionId, mode, compact = false }) => {
   const hideDivider = mode
     ? (mode === 'ai' ? pageNumber >= 3 : pageNumber >= 4)
     : false;
 
   return (
     <div
-      className="flex items-center justify-between text-[11px] text-slate-700 font-sans px-1 shrink-0 select-text"
+      className={`flex items-center justify-between ${compact ? 'text-[8px]' : 'text-[11px]'} text-slate-700 font-sans px-1 shrink-0 select-text`}
       style={{
         paddingTop: hideDivider ? 0 : 10,
         marginTop: hideDivider ? 0 : 24,
@@ -182,12 +184,12 @@ export const TurnitinPageFooter: React.FC<{
     >
       <div className="flex items-center gap-6">
         <TurnitinLogoWithText size="sm" />
-        <span className="text-slate-600 font-medium">
+        <span className={`text-slate-600 ${compact ? 'font-normal' : 'font-medium'}`}>
           Page {pageNumber} of {totalPages} - {sectionTitle}
         </span>
       </div>
-      <div className="text-slate-600 font-mono text-[10.5px]">
-        Submission ID <span className="font-semibold">{submissionId}</span>
+      <div className={`text-slate-600 ${compact ? 'font-sans text-[7.5px]' : 'font-mono text-[10.5px]'}`}>
+        Submission ID <span className={compact ? 'font-normal' : 'font-semibold'}>{submissionId}</span>
       </div>
     </div>
   );
@@ -229,15 +231,16 @@ export const TurnitinCoverPage: React.FC<{
       <div className="mt-auto mb-10 pt-36 sm:pt-44 max-w-2xl w-full">
         {/* Author Initials & Document Title Block */}
         <div>
-          <div className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-normal leading-none">
+          <div className="text-[46px] sm:text-[52px] font-black text-[#1e2a3a] tracking-[-0.06em] leading-none">
             {authorInitials}
           </div>
-          <h1 className="text-[15px] sm:text-[16px] font-bold text-slate-900 leading-snug mt-2">
+          <h1 className="text-[16px] sm:text-[18px] font-bold text-slate-900 leading-[1.3] mt-3 max-w-[760px]">
             {report.fileName || report.title}
           </h1>
-          <div className="flex items-center text-[12px] text-slate-600 font-normal mt-1.5">
-            <GraduationCap className="w-3.5 h-3.5 text-slate-600 shrink-0 inline-block mr-1" />
-            <span>&nbsp;&nbsp;{institution}</span>
+
+          <div className="mt-4 flex min-w-0 items-center gap-2 text-[13px] text-slate-600 font-normal">
+            <GraduationCap className="h-4 w-4 text-slate-600 shrink-0" />
+            <span className="min-w-0 break-words">{institution}</span>
           </div>
         </div>
 
@@ -246,13 +249,13 @@ export const TurnitinCoverPage: React.FC<{
 
         {/* Document Details Section */}
         <div>
-          <h2 className="text-[16px] font-bold text-black mb-4">
+          <h2 className="text-[13.5px] font-semibold text-slate-700 mb-4">
             Document Details
           </h2>
 
           <div className="flex justify-between items-start gap-8 text-[11px]">
             {/* Left Column: Details */}
-            <div className="space-y-3.5 flex-1 max-w-md">
+            <div className="space-y-4 flex-1 max-w-md">
               <div>
                 <span className="text-[10px] text-[#475569] font-medium block leading-none mb-1">
                   Submission ID
@@ -296,14 +299,14 @@ export const TurnitinCoverPage: React.FC<{
             </div>
 
             {/* Right Column: Pages, Words, Characters inside the short, compact gray shaded box positioned near the right side */}
-            <div className="bg-[#f0f3f6] border border-[#e2e6eb] rounded-2xl px-5 py-3.5 space-y-2.5 text-[11.5px] text-black font-medium shrink-0 self-start shadow-none min-w-[135px] max-w-[160px]">
-              <div className="leading-tight text-black font-medium">
+            <div className="w-max shrink-0 self-start mr-10 bg-[#f0f3f6] border border-[#e2e6eb] rounded-2xl px-3 py-3.5 space-y-3.5 text-[11.5px] text-slate-800 font-medium shadow-none">
+              <div className="leading-tight">
                 {manuscriptPages} Pages
               </div>
-              <div className="leading-tight text-black font-medium">
+              <div className="leading-tight">
                 {report.wordCount.toLocaleString()} Words
               </div>
-              <div className="leading-tight text-black font-medium">
+              <div className="leading-tight">
                 {report.characterCount.toLocaleString()} Characters
               </div>
             </div>
@@ -331,60 +334,87 @@ export const TurnitinAIOverviewPage: React.FC<{
   mode?: 'ai' | 'similarity';
 }> = ({ report, totalPages, mode = 'ai' }) => {
   const submissionId = report.submissionId || 'trn:oid:::1:9948210344';
-  const isBelowThreshold = report.aiScore <= 20 && report.aiScore >= 1;
-  const showAiGeneratedSummary = report.aiScore >= 21 && report.aiScore <= 90;
-  const aiGeneratedCount = report.snippets.filter(snippet => snippet.type === 'ai_generated').length;
-  const scoreDisplay = formatTurnitinAiScore(report.aiScore);
+  const rawAiScore = typeof report.aiScore === 'number' ? report.aiScore : 0;
+  let displayAiScore = rawAiScore;
+  
+  const isBelowThreshold = displayAiScore <= 20 && displayAiScore >= 1;
+  const isZero = displayAiScore === 0;
+  const aiAnnotations = report.snippets
+    .filter(snippet => snippet.type === 'ai_generated')
+    .map(snippet => snippet.text);
+  const showAiGeneratedSummary = rawAiScore > 0 || aiAnnotations.length > 0;
+  // Use original score for display to match official Turnitin format
+  const scoreDisplay = formatTurnitinAiScore(rawAiScore);
 
   return (
-    <div className="flex flex-col justify-between h-full min-h-[960px] font-sans p-6 sm:p-10 text-slate-900 bg-white select-text">
+    <div
+      className="flex flex-col justify-between h-full min-h-[960px] font-sans p-6 sm:p-10 text-slate-900 bg-white select-text"
+    >
       <TurnitinPageHeader
         pageNumber={2}
         totalPages={totalPages}
-        sectionTitle="AI Writing Overview"
+        sectionTitle="AI-Writing Overview"
         submissionId={submissionId}
         mode={mode}
+        compact
       />
 
-      <div className="mt-8 mb-auto space-y-6 max-w-4xl w-full">
+      <div className="mb-auto max-w-4xl w-full">
         {/* Top Split: Detection headline vs Caution Box (Balanced width, tight line-height, equal vertical alignment) */}
-        <div className="grid grid-cols-1 md:grid-cols-[1.15fr_1.2fr] gap-6 items-center">
+        <div className="grid grid-cols-1 md:grid-cols-[1.12fr_1.28fr] gap-5 items-center" style={{ columnGap: displayAiScore >= 70 ? '10px' : '18px' }}>
           {/* Left: AI percentage and explanation */}
-          <div className="space-y-1.5 flex flex-col justify-center">
-            <h1 className="text-[22px] sm:text-[23px] font-bold text-black tracking-tight leading-none m-0 p-0 font-['Outfit',sans-serif]">
-              {scoreDisplay} detected as AI
-            </h1>
-            <p className="text-[8px] sm:text-[8.5px] text-slate-800 leading-[1.25] mt-1">
-              {isBelowThreshold ? (
-                <span className="font-normal text-black">
-                  <span className="block text-[9px] sm:text-[9.5px]">
-                    AI detection can produce false positives. Scores below 20%
-                  </span>
-                  <span className="block text-[8px] sm:text-[8.5px]">
-                    are hidden because they are more likely to be false positives.
-                  </span>
+          <div className="flex flex-col justify-center gap-0" style={{ width: displayAiScore >= 70 ? '108%' : '100%' }}>
+            <div style={{ lineHeight: '16px', margin: 0, padding: 0, width: displayAiScore >= 70 ? '108%' : '100%' }}>
+              <h1
+                className="p-0 m-0"
+                style={{
+                  fontFamily: '"Roboto Variable", Roboto, "Helvetica Neue", Helvetica, sans-serif',
+                  fontSize: '15.5px',
+                  fontWeight: 400,
+                  lineHeight: '16px',
+                  color: '#000000',
+                  letterSpacing: 'normal',
+                  margin: 0,
+                  padding: 0,
+                  display: 'inline-block',
+                  WebkitFontSmoothing: 'antialiased',
+                }}
+              >
+                {toBoldUnicode(isZero ? '0% detected as AI' : isBelowThreshold ? '*% detected as AI' : `${displayAiScore}% detected as AI`)}
+              </h1>
+            </div>
+            <p className="m-0 p-0" style={{ marginTop: 1, display: 'block', fontFamily: "'Arial', 'Helvetica', sans-serif", fontSize: '10.5px', color: '#475569', lineHeight: '14px', width: displayAiScore >= 70 ? '108%' : '100%' }}>
+              {isZero ? (
+                <span className="font-normal" style={{ fontFamily: "'Arial', 'Helvetica', sans-serif", fontSize: '10.5px', display: 'block', color: '#475569', lineHeight: '14px' }}>
+                  Our AI writing assessment detects text generated by AI tools. No text in this
+                  submission was identified as AI generated.
                 </span>
-              ) : report.aiScore === 0 ? (
-                <span className="font-normal text-slate-800">
+              ) : isBelowThreshold ? (
+                <span className="font-normal" style={{ fontFamily: "'Arial', 'Helvetica', sans-serif", color: '#475569', lineHeight: '14px' }}>
+                  AI detection includes the possibility of false positives. Although some text in
+                  this submission is likely AI generated, scores below the 20% threshold are not
+                  surfaced because they have a higher likelihood of false positives.
+                </span>
+              ) : rawAiScore === 0 ? (
+                <span className="font-normal" style={{ fontFamily: "'Arial', 'Helvetica', sans-serif", fontSize: '10.5px', display: 'block', color: '#475569', lineHeight: '14px' }}>
                   Our AI writing assessment detects text generated by AI tools. No text in this
                   submission was identified as AI generated.
                 </span>
               ) : (
-                <span className="font-normal text-slate-800">
-                  Our AI writing assessment detects text generated by AI tools. Some text in this
-                  submission is likely AI generated. Review flagged sections to evaluate context and
-                  attribution.
+                <span className="font-normal" style={{ fontFamily: "'Arial', 'Helvetica', sans-serif", color: '#475569', lineHeight: '14px', fontSize: '10.5px' }}>
+                  The percentage indicates the combined amount of likely AI-generated text as well
+                  as likely AI-generated text that was also likely revised by AI.
                 </span>
               )}
             </p>
           </div>
 
           {/* Right: Caution Blue Box (wider in width, shorter in height, 3 lines of text, vertically aligned) */}
-          <div className="bg-[#d9ecfa] border border-[#a2d2f5] rounded-xl px-4 py-3 space-y-1 shadow-none flex flex-col justify-center">
-            <h3 className="text-xs font-bold text-black leading-snug">
+          <div className="bg-[#d9ecfa] border border-[#a2d2f5] rounded-lg px-3 py-2 space-y-1 shadow-none flex flex-col justify-center">
+            <h3 className="text-[9px] font-normal text-black leading-snug">
               Caution: Review required.
             </h3>
-            <p className="text-[10px] sm:text-[10.5px] text-black font-normal leading-[1.35]">
+            <p className="text-[7.5px] sm:text-[8px] text-black font-normal leading-[1.3]">
               It is essential to understand the limitations of AI detection before making decisions
               about a student’s work. We encourage you to learn more about Turnitin’s AI detection
               capabilities before using the tool.
@@ -393,18 +423,19 @@ export const TurnitinAIOverviewPage: React.FC<{
         </div>
 
         {/* Thin Divider Rule */}
-        <hr className="border-slate-200 my-0" />
+        <hr className="mt-3 border-slate-200" />
 
         {showAiGeneratedSummary && (
-          <div className="flex items-center gap-3 border-b border-slate-200 py-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-cyan-500 text-white">
-              <Bot className="h-4 w-4" />
+          <div className="mt-4 flex items-center gap-2 border-b border-slate-200 py-4">
+            <div className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-cyan-500 text-white">
+              <Bot className="h-2.5 w-2.5" />
             </div>
             <div className="min-w-0">
-              <p className="text-[11px] font-bold leading-tight text-black">
-                {aiGeneratedCount} AI-generated {report.aiScore}%
+              <p className="text-[9px] font-normal leading-tight text-black">
+                {aiAnnotations.length > 0 ? `${aiAnnotations.length} ` : ''}
+                AI-generated {rawAiScore >= 1 && rawAiScore <= 20 ? '*%' : (rawAiScore > 20 ? `${rawAiScore}%` : scoreDisplay)}
               </p>
-              <p className="mt-0.5 text-[9px] leading-tight text-slate-600">
+              <p className="mt-0.5 text-[7px] leading-tight text-slate-600">
                 Likely generated or likely generated and revised by AI.
               </p>
             </div>
@@ -412,11 +443,11 @@ export const TurnitinAIOverviewPage: React.FC<{
         )}
 
         {/* Disclaimer Section (1-line gap below underline, increased font size by 2, 0 gap before sentence) */}
-        <div className="space-y-0.5 pt-3.5">
-          <h2 className="text-[13px] font-normal text-black leading-none m-0 p-0">
+        <div className="mt-4 pt-3">
+          <h2 className="text-[8px] font-normal text-black leading-none m-0 p-0">
             Disclaimer
           </h2>
-          <p className="text-[7px] sm:text-[7.5px] text-slate-700 leading-[1.25] mt-1.5 p-0">
+          <p className="text-[5px] sm:text-[5.5px] text-slate-600 leading-[1.25] mt-1 p-0">
             Our AI writing assessment is designed to help educators identify text that might be prepared by a generative AI tool. Our AI writing assessment may not always be accurate<br />
             (it may misidentify writing that is likely human generated as AI generated and likely AI generated as human generated) so it should not be used as the sole basis for adverse actions against a student.<br />
             It takes further scrutiny and human judgment in conjunction with an organization's application of its specific academic policies to determine whether any academic misconduct has occurred.
@@ -424,15 +455,16 @@ export const TurnitinAIOverviewPage: React.FC<{
         </div>
 
         {/* Thin Divider Rule after Disclaimer with 1-line gap */}
-        <hr className="border-slate-200 mt-4 mb-0" />
+        <hr className="mt-4 border-slate-200" />
       </div>
 
       <TurnitinPageFooter
         pageNumber={2}
         totalPages={totalPages}
-        sectionTitle="AI Writing Overview"
+        sectionTitle="AI-Writing Overview"
         submissionId={submissionId}
         mode={mode}
+        compact
       />
     </div>
   );
@@ -448,6 +480,7 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
 }> = ({ report, totalPages, mode = 'similarity' }) => {
   const submissionId = report.submissionId || 'trn:oid:::2:445438161';
   const plagScore = Math.max(1, clampSimilarityScore(report.plagiarismScore || 1));
+  const isLowSimilarityReport = mode === 'similarity' && plagScore < 9;
   const matchGroups = report.matchGroups || {
     notCitedOrQuoted: Math.max(1, Math.round(plagScore * 2.8)),
     notCitedOrQuotedScore: plagScore,
@@ -457,13 +490,13 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
   };
 
   const sourceDist = report.sourceDistribution || {
-    internet: 1,
-    publications: Math.max(1, plagScore - 1),
-    studentPapers: 0,
+    internet: (report.sources || []).filter(source => source.type === 'internet').length,
+    publications: (report.sources || []).filter(source => source.type === 'publication').length,
+    studentPapers: (report.sources || []).filter(source => source.type === 'student_paper').length,
   };
 
   return (
-    <div className="flex flex-col justify-between h-full min-h-[960px] font-sans p-6 sm:p-10 text-slate-900 bg-white select-text">
+    <div className="flex flex-col justify-between h-[1050px] font-sans p-6 sm:p-10 text-slate-900 bg-white select-text">
       <TurnitinPageHeader
         pageNumber={2}
         totalPages={totalPages}
@@ -472,10 +505,10 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
         mode={mode}
       />
 
-      <div className="mt-2 mb-auto space-y-4 max-w-3xl w-full">
+      <div className="mt-2 flex-1 flex flex-col gap-4 max-w-3xl w-full">
         {/* Main Similarity Headline without extra space */}
         <div className="space-y-1">
-          <h1 className="text-[21px] sm:text-[23px] font-bold text-[#0f172a] tracking-tight leading-tight m-0 p-0">
+          <h1 className={`${isLowSimilarityReport ? 'text-[23.7px] sm:text-[25.7px]' : 'text-[22.7px] sm:text-[24.7px]'} font-semibold text-[#0f172a] tracking-tight leading-tight m-0 p-0`}>
             {plagScore}% Overall Similarity
           </h1>
           <p className="text-[10.5px] text-slate-600 leading-normal m-0 p-0">
@@ -483,12 +516,18 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
           </p>
         </div>
 
-        {/* Filtered from the Report starting on the left side */}
-        <div className="space-y-1 text-[11px] pt-1">
-          <div className="font-bold text-black text-[14.5px]">Filtered from the Report</div>
-          <div className="space-y-0.5 text-[10.5px] text-black font-normal">
-            <div>• Bibliography</div>
-            <div>• Quoted Text</div>
+        {/* Filtered from the Report — one line below Overall Similarity */}
+        <div className="space-y-0 text-[11px] mt-3 pt-1">
+          <div className="font-semibold text-slate-800 text-[14.5px]">Filtered from the Report</div>
+          <div className="mt-[11px] space-y-[5px] text-[10.5px] text-slate-500 font-normal">
+            <div className="flex items-center gap-1">
+              <span aria-hidden="true" className="mt-0.5 h-0 w-0 border-y-[2px] border-y-transparent border-l-[3px] border-l-current" />
+              <span>Bibliography</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span aria-hidden="true" className="mt-0.5 h-0 w-0 border-y-[2px] border-y-transparent border-l-[3px] border-l-current" />
+              <span>Quoted Text</span>
+            </div>
           </div>
         </div>
 
@@ -500,78 +539,78 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
         {/* Two Columns: Match Groups & Top Sources enclosed within underlines */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
           {/* Column 1: Match Groups */}
-          <div className="space-y-3.5">
+          <div className="space-y-4">
             <h3 className="text-[15.5px] font-bold text-slate-900 tracking-tight">
               Match Groups
             </h3>
 
-            <div className="space-y-3.5 text-xs">
+            <div className="space-y-5 text-xs pt-1">
               {/* Not Cited or Quoted - Red with overlapping documents */}
-              <div className="flex items-start gap-2.5">
-                <span className="w-5 h-5 rounded-full bg-[#d93829] flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-[#d93829] flex items-center justify-center shrink-0 shadow-xs">
                   <svg viewBox="0 0 24 24" className="w-3 h-3 fill-white">
                     <rect x="7.5" y="3.5" width="10" height="13" rx="1" fill="white" opacity="0.65" />
                     <rect x="4.5" y="6.5" width="10" height="13" rx="1" fill="white" />
                   </svg>
                 </span>
-                <div className="leading-tight">
+                <div className="leading-snug">
                   <div className="font-bold text-black text-[11.5px]">
                     {matchGroups.notCitedOrQuoted} Not Cited or Quoted &nbsp;<span className="font-bold text-black">{matchGroups.notCitedOrQuotedScore ?? plagScore}%</span>
                   </div>
-                  <div className="text-[10.5px] text-slate-500 mt-0.5">
+                  <div className="text-[10.5px] text-slate-500 mt-1">
                     Matches with neither in-text citation nor quotation marks
                   </div>
                 </div>
               </div>
 
               {/* Missing Quotations - Orange with quotation marks */}
-              <div className="flex items-start gap-2.5">
-                <span className="w-5 h-5 rounded-full bg-[#f58220] flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-[#f58220] flex items-center justify-center shrink-0 shadow-xs">
                   <svg viewBox="0 0 24 24" className="w-2.5 h-2.5 fill-white">
                     <path d="M4.5 17C3.5 16 3 14.8 3 13c0-3.5 2.5-6.5 6-8l.9 1.4C6.6 8.2 6 10.5 5.7 12c.5-.3 1.2-.4 1.9-.3 1.8.2 3.2 1.6 3.2 3.5 0 2-1.6 3.5-3.5 3.5-1 0-2.1-.5-2.8-1.7zm10 0c-1-1-1.5-2.2-1.5-4 0-3.5 2.5-6.5 6-8l.9 1.4c-3.3 1.8-3.9 4.1-4.2 5.6.5-.3 1.2-.4 1.9-.3 1.8.2 3.2 1.6 3.2 3.5 0 2-1.6 3.5-3.5 3.5-1 0-2.1-.5-2.8-1.7z" />
                   </svg>
                 </span>
-                <div className="leading-tight">
+                <div className="leading-snug">
                   <div className="font-bold text-black text-[11.5px]">
                     {matchGroups.missingQuotations} Missing Quotations &nbsp;<span className="font-bold text-black">{matchGroups.missingQuotationsScore ?? 0}%</span>
                   </div>
-                  <div className="text-[10.5px] text-slate-500 mt-0.5">
+                  <div className="text-[10.5px] text-slate-500 mt-1">
                     Matches that are still very similar to source material
                   </div>
                 </div>
               </div>
 
               {/* Missing Citation - Yellow with 3 horizontal bars */}
-              <div className="flex items-start gap-2.5">
-                <span className="w-5 h-5 rounded-full bg-[#fbb034] flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-[#fbb034] flex items-center justify-center shrink-0 shadow-xs">
                   <svg viewBox="0 0 24 24" className="w-3 h-3 fill-white">
                     <rect x="4" y="6" width="16" height="2.2" rx="1.1" />
                     <rect x="4" y="10.9" width="16" height="2.2" rx="1.1" />
                     <rect x="4" y="15.8" width="16" height="2.2" rx="1.1" />
                   </svg>
                 </span>
-                <div className="leading-tight">
+                <div className="leading-snug">
                   <div className="font-bold text-black text-[11.5px]">
                     {matchGroups.missingCitation} Missing Citation &nbsp;<span className="font-bold text-black">{matchGroups.missingCitationScore ?? 0}%</span>
                   </div>
-                  <div className="text-[10.5px] text-slate-500 mt-0.5">
+                  <div className="text-[10.5px] text-slate-500 mt-1">
                     Matches that have quotation marks, but no in-text citation
                   </div>
                 </div>
               </div>
 
               {/* Cited and Quoted - Green with Graduation Cap */}
-              <div className="flex items-start gap-2.5">
-                <span className="w-5 h-5 rounded-full bg-[#2e7d32] flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+              <div className="flex items-center gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-[#2e7d32] flex items-center justify-center shrink-0 shadow-xs">
                   <svg viewBox="0 0 24 24" className="w-3 h-3 fill-white">
                     <path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3z M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82z" />
                   </svg>
                 </span>
-                <div className="leading-tight">
+                <div className="leading-snug">
                   <div className="font-bold text-black text-[11.5px]">
                     {matchGroups.citedAndQuoted} Cited and Quoted &nbsp;<span className="font-bold text-black">{matchGroups.citedAndQuotedScore ?? 0}%</span>
                   </div>
-                  <div className="text-[10.5px] text-slate-500 mt-0.5">
+                  <div className="text-[10.5px] text-slate-500 mt-1">
                     Matches with in-text citation present, but no quotation marks
                   </div>
                 </div>
@@ -587,19 +626,19 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
 
             <div className="space-y-1.5 text-xs text-slate-900">
               <div className="flex items-center gap-2">
-                <span className="font-bold w-6 text-right text-[12px] text-slate-950">{sourceDist.internet}%</span>
+                <span className="font-bold w-8 text-right text-[12px] text-slate-950">{sourceDist.internet}</span>
                 <Globe className="w-3.5 h-3.5 text-slate-700 shrink-0 ml-1" />
                 <span className="text-[11.5px] font-semibold text-slate-900">Internet sources</span>
               </div>
 
               <div className="flex items-center gap-2">
-                <span className="font-bold w-6 text-right text-[12px] text-slate-950">{sourceDist.publications}%</span>
+                <span className="font-bold w-8 text-right text-[12px] text-slate-950">{sourceDist.publications}</span>
                 <BookOpen className="w-3.5 h-3.5 text-slate-700 shrink-0 ml-1" />
                 <span className="text-[11.5px] font-semibold text-slate-900">Publications</span>
               </div>
 
               <div className="flex items-center gap-2">
-                <span className="font-bold w-6 text-right text-[12px] text-slate-950">{sourceDist.studentPapers}%</span>
+                <span className="font-bold w-8 text-right text-[12px] text-slate-950">{sourceDist.studentPapers}</span>
                 <GraduationCap className="w-3.5 h-3.5 text-slate-700 shrink-0 ml-1" />
                 <span className="text-[11.5px] font-semibold text-slate-900">Submitted works (Student Papers)</span>
               </div>
@@ -613,13 +652,13 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
         <div className="border-b border-slate-200 pb-2" />
 
         {/* Integrity Flags Section (Below lower underline) */}
-        <div className="pt-2">
+        <div className="pt-2 flex-1 flex flex-col">
           <h3 className="text-[12.5px] font-bold text-slate-900 mb-2.5 tracking-tight">
             Integrity Flags
           </h3>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-            <div>
+          <div className="flex gap-6 flex-1">
+            <div className="flex-1">
               <div className="text-[11.5px] font-bold text-slate-900">
                 0 Integrity Flags for Review
               </div>
@@ -629,7 +668,7 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
             </div>
 
             {/* Right Darker Blue Info Box with black text and further reduced font size */}
-            <div className="bg-[#d5ebf9] border border-[#85c6ea] rounded-xl p-3 text-[8.5px] space-y-1.5 leading-snug shadow-none text-black">
+            <div className="flex-1 bg-[#d5ebf9] border border-[#85c6ea] rounded-xl px-3 pt-3.5 pb-3 text-[8.5px] space-y-1.5 leading-snug shadow-none text-black flex flex-col justify-start">
               <p className="font-normal text-black leading-snug">
                 Our system's algorithms look deeply at a document for any inconsistencies that
                 would set it apart from a normal submission. If we notice something strange, we flag
@@ -664,6 +703,30 @@ export function formatTurnitinAiScore(score: number): string {
     return '*%';
   }
   return `${score}%`;
+}
+
+/**
+ * Converts a plain ASCII string to Unicode Mathematical Bold characters.
+ * Bold digits: 𝟎–𝟗 (U+1D7CE–U+1D7D7)
+ * Bold uppercase: 𝐀–𝐙 (U+1D400–U+1D419)
+ * Bold lowercase: 𝐚–𝐳 (U+1D41A–U+1D433)
+ * Non-letter/digit characters (%, space, *) are passed through unchanged.
+ */
+export function toBoldUnicode(str: string): string {
+  return Array.from(str).map(ch => {
+    const code = ch.codePointAt(0)!;
+    if (code >= 0x30 && code <= 0x39) {
+      // digit 0–9 → 𝟎–𝟗
+      return String.fromCodePoint(0x1D7CE + (code - 0x30));
+    } else if (code >= 0x41 && code <= 0x5A) {
+      // uppercase A–Z → 𝐀–𝐙
+      return String.fromCodePoint(0x1D400 + (code - 0x41));
+    } else if (code >= 0x61 && code <= 0x7A) {
+      // lowercase a–z → 𝐚–𝐳
+      return String.fromCodePoint(0x1D41A + (code - 0x61));
+    }
+    return ch;
+  }).join('');
 }
 
 /**
@@ -716,9 +779,9 @@ export const TurnitinTopSourcesPage: React.FC<{
   };
 
   const sourceDist = report.sourceDistribution || {
-    internet: 1,
-    publications: 15,
-    studentPapers: 0,
+    internet: (report.sources || []).filter(source => source.type === 'internet').length,
+    publications: (report.sources || []).filter(source => source.type === 'publication').length,
+    studentPapers: (report.sources || []).filter(source => source.type === 'student_paper').length,
   };
 
   return (
@@ -738,78 +801,78 @@ export const TurnitinTopSourcesPage: React.FC<{
             {/* Top Half: 2-Column Summary */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
               {/* Column 1: Match Groups */}
-              <div className="space-y-2.5">
+              <div className="space-y-3.5">
                 <h3 className="text-[15.5px] font-bold text-slate-900 tracking-tight">
                   Match Groups
                 </h3>
 
-                <div className="space-y-2 text-xs">
+                <div className="space-y-4 text-xs pt-1">
                   {/* Not Cited or Quoted - Red with overlapping documents */}
-                  <div className="flex items-start gap-2.5">
-                    <span className="w-4.5 h-4.5 rounded-full bg-[#d93829] flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-4.5 h-4.5 rounded-full bg-[#d93829] flex items-center justify-center shrink-0 shadow-xs">
                       <svg viewBox="0 0 24 24" className="w-2.5 h-2.5 fill-white">
                         <rect x="7.5" y="3.5" width="10" height="13" rx="1" fill="white" opacity="0.65" />
                         <rect x="4.5" y="6.5" width="10" height="13" rx="1" fill="white" />
                       </svg>
                     </span>
-                    <div className="leading-tight">
+                    <div className="leading-snug">
                       <div className="font-bold text-black text-[11px]">
                         {matchGroups.notCitedOrQuoted || 51} Not Cited or Quoted &nbsp;<span className="font-bold text-black">{clampSimilarityScore(matchGroups.notCitedOrQuotedScore ?? report.plagiarismScore ?? 1)}%</span>
                       </div>
-                      <div className="text-[9.5px] text-slate-500 mt-0.5">
+                      <div className="text-[9.5px] text-slate-500 mt-1">
                         Matches with neither in-text citation nor quotation marks
                       </div>
                     </div>
                   </div>
 
                   {/* Missing Quotations - Orange with quotes */}
-                  <div className="flex items-start gap-2.5">
-                    <span className="w-4.5 h-4.5 rounded-full bg-[#f58220] flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-4.5 h-4.5 rounded-full bg-[#f58220] flex items-center justify-center shrink-0 shadow-xs">
                       <svg viewBox="0 0 24 24" className="w-2 h-2 fill-white">
                         <path d="M4.5 17C3.5 16 3 14.8 3 13c0-3.5 2.5-6.5 6-8l.9 1.4C6.6 8.2 6 10.5 5.7 12c.5-.3 1.2-.4 1.9-.3 1.8.2 3.2 1.6 3.2 3.5 0 2-1.6 3.5-3.5 3.5-1 0-2.1-.5-2.8-1.7zm10 0c-1-1-1.5-2.2-1.5-4 0-3.5 2.5-6.5 6-8l.9 1.4c-3.3 1.8-3.9 4.1-4.2 5.6.5-.3 1.2-.4 1.9-.3 1.8.2 3.2 1.6 3.2 3.5 0 2-1.6 3.5-3.5 3.5-1 0-2.1-.5-2.8-1.7z" />
                       </svg>
                     </span>
-                    <div className="leading-tight">
+                    <div className="leading-snug">
                       <div className="font-bold text-black text-[11px]">
                         {matchGroups.missingQuotations} Missing Quotations &nbsp;<span className="font-bold text-black">{matchGroups.missingQuotationsScore ?? 0}%</span>
                       </div>
-                      <div className="text-[9.5px] text-slate-500 mt-0.5">
+                      <div className="text-[9.5px] text-slate-500 mt-1">
                         Matches that are still very similar to source material
                       </div>
                     </div>
                   </div>
 
                   {/* Missing Citation - Yellow with 3 bars */}
-                  <div className="flex items-start gap-2.5">
-                    <span className="w-4.5 h-4.5 rounded-full bg-[#fbb034] flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-4.5 h-4.5 rounded-full bg-[#fbb034] flex items-center justify-center shrink-0 shadow-xs">
                       <svg viewBox="0 0 24 24" className="w-2.5 h-2.5 fill-white">
                         <rect x="4" y="6" width="16" height="2.2" rx="1.1" />
                         <rect x="4" y="10.9" width="16" height="2.2" rx="1.1" />
                         <rect x="4" y="15.8" width="16" height="2.2" rx="1.1" />
                       </svg>
                     </span>
-                    <div className="leading-tight">
+                    <div className="leading-snug">
                       <div className="font-bold text-black text-[11px]">
                         {matchGroups.missingCitation} Missing Citation &nbsp;<span className="font-bold text-black">{matchGroups.missingCitationScore ?? 0}%</span>
                       </div>
-                      <div className="text-[9.5px] text-slate-500 mt-0.5">
+                      <div className="text-[9.5px] text-slate-500 mt-1">
                         Matches that have quotation marks, but no in-text citation
                       </div>
                     </div>
                   </div>
 
                   {/* Cited and Quoted - Green with Cap */}
-                  <div className="flex items-start gap-2.5">
-                    <span className="w-4.5 h-4.5 rounded-full bg-[#2e7d32] flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+                  <div className="flex items-center gap-2.5">
+                    <span className="w-4.5 h-4.5 rounded-full bg-[#2e7d32] flex items-center justify-center shrink-0 shadow-xs">
                       <svg viewBox="0 0 24 24" className="w-2.5 h-2.5 fill-white">
                         <path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3z M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82z" />
                       </svg>
                     </span>
-                    <div className="leading-tight">
+                    <div className="leading-snug">
                       <div className="font-bold text-black text-[11px]">
                         {matchGroups.citedAndQuoted} Cited and Quoted &nbsp;<span className="font-bold text-black">{matchGroups.citedAndQuotedScore ?? 0}%</span>
                       </div>
-                      <div className="text-[9.5px] text-slate-500 mt-0.5">
+                      <div className="text-[9.5px] text-slate-500 mt-1">
                         Matches with in-text citation present, but no quotation marks
                       </div>
                     </div>
@@ -825,19 +888,19 @@ export const TurnitinTopSourcesPage: React.FC<{
 
                 <div className="space-y-1.5 text-xs text-slate-900">
                   <div className="flex items-center gap-2">
-                    <span className="font-bold w-6 text-right text-[11.5px] text-slate-950">{sourceDist.internet}%</span>
+                    <span className="font-bold w-8 text-right text-[11.5px] text-slate-950">{sourceDist.internet}</span>
                     <Globe className="w-3.5 h-3.5 text-slate-700 shrink-0 ml-1" />
                     <span className="text-[11px] font-semibold text-slate-900">Internet sources</span>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <span className="font-bold w-6 text-right text-[11.5px] text-slate-950">{sourceDist.publications}%</span>
+                    <span className="font-bold w-8 text-right text-[11.5px] text-slate-950">{sourceDist.publications}</span>
                     <BookOpen className="w-3.5 h-3.5 text-slate-700 shrink-0 ml-1" />
                     <span className="text-[11px] font-semibold text-slate-900">Publications</span>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <span className="font-bold w-6 text-right text-[11.5px] text-slate-950">{sourceDist.studentPapers}%</span>
+                    <span className="font-bold w-8 text-right text-[11.5px] text-slate-950">{sourceDist.studentPapers}</span>
                     <GraduationCap className="w-3.5 h-3.5 text-slate-700 shrink-0 ml-1" />
                     <span className="text-[11px] font-semibold text-slate-900">Submitted works (Student Papers)</span>
                   </div>
@@ -859,11 +922,11 @@ export const TurnitinTopSourcesPage: React.FC<{
                 </p>
               </div>
 
-              <div className="space-y-1 pt-1">
+              <div className="space-y-0 pt-1">
                 {sourcesSlice.map((s, idx) => {
                   const currentIdx = startIndex + idx + 1;
                   const badge = getBadgeColor(currentIdx);
-                  const displaySim = s.similarity < 1 ? '<1%' : `${clampSimilarityScore(s.similarity)}%`;
+                  const displaySim = s.similarity <= 1 ? '<1%' : `${clampSimilarityScore(s.similarity)}%`;
                   const typeLabel =
                     s.type === 'internet'
                       ? 'Internet'
@@ -874,28 +937,23 @@ export const TurnitinTopSourcesPage: React.FC<{
                   return (
                     <div
                       key={`${s.id}-${currentIdx}`}
-                      className="pb-1 border-b border-slate-100 last:border-b-0 space-y-0.5"
+                      className="relative flex h-32 flex-col justify-center after:absolute after:bottom-0 after:left-0 after:right-[150px] after:border-b after:border-slate-300 last:after:hidden"
                     >
-                      {/* Line 1: Badge Pill, Percentage & Source Type Tag on the LEFT */}
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2.5">
                         <span
-                          className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-[9px] font-bold text-white leading-none shadow-2xs ${badge.bg}`}
+                          className={`inline-flex h-9 min-w-[2.75rem] shrink-0 items-center justify-center rounded-full px-2 text-center text-[12px] font-bold tabular-nums leading-none text-white ${badge.bg}`}
                         >
                           {currentIdx}
                         </span>
-                        <span className="text-[11.5px] font-bold text-slate-950 font-sans shrink-0">
-                          {displaySim}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded-full text-[8.5px] font-semibold leading-none ${badge.tagBg}`}>
+                        <span className={`inline-flex h-9 shrink-0 items-center justify-center rounded-full px-7 text-center text-[12px] font-semibold leading-none ${badge.tagBg.split(' ')[0]} text-black`}>
                           {typeLabel}
                         </span>
                       </div>
-
-                      {/* Line 2: Source Title */}
-                      <div className="pt-0.5">
-                        <span className="text-[10.5px] font-semibold text-slate-950 truncate block">
+                      <div className="mt-3 min-w-0">
+                        <span className="block min-w-0 truncate text-[13.5px] font-semibold text-slate-900">
                           {s.name}
                         </span>
+                        <span className="mt-0.5 block pr-[155px] text-right text-[13.5px] font-semibold text-slate-900">{displaySim}</span>
                       </div>
                     </div>
                   );
@@ -905,21 +963,12 @@ export const TurnitinTopSourcesPage: React.FC<{
           </div>
         ) : (
           /* Multi-page continuation of sources (Pages 4, 5, etc.) */
-          <div className="space-y-3 flex-1 flex flex-col justify-start">
-            <div>
-              <h3 className="text-[14px] font-bold text-slate-950 tracking-tight">
-                Top Sources
-              </h3>
-              <p className="text-[10px] text-slate-700 font-normal mt-0.5">
-                The sources with the highest number of matches within the submission. Overlapping sources will not be displayed.
-              </p>
-            </div>
-
-            <div className="space-y-1.5 pt-1">
+          <div className="flex-1 flex flex-col justify-start">
+            <div className="space-y-0 pt-1">
               {sourcesSlice.map((s, idx) => {
                 const currentIdx = startIndex + idx + 1;
                 const badge = getBadgeColor(currentIdx);
-                const displaySim = s.similarity < 1 ? '<1%' : `${clampSimilarityScore(s.similarity)}%`;
+                const displaySim = s.similarity <= 1 ? '<1%' : `${clampSimilarityScore(s.similarity)}%`;
                 const typeLabel =
                   s.type === 'internet'
                     ? 'Internet'
@@ -930,28 +979,23 @@ export const TurnitinTopSourcesPage: React.FC<{
                 return (
                   <div
                     key={`${s.id}-${currentIdx}`}
-                    className="pb-1 border-b border-slate-100 last:border-b-0 space-y-0.5"
+                    className="relative flex h-32 flex-col justify-center after:absolute after:bottom-0 after:left-0 after:right-[150px] after:border-b after:border-slate-300 last:after:hidden"
                   >
-                    {/* Line 1: Badge Pill, Percentage & Source Type Tag on the LEFT */}
-                    <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2.5">
                       <span
-                        className={`inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-[9px] font-bold text-white leading-none shadow-2xs ${badge.bg}`}
+                        className={`inline-flex h-9 min-w-[2.75rem] shrink-0 items-center justify-center rounded-full px-2 text-center text-[12px] font-bold tabular-nums leading-none text-white ${badge.bg}`}
                       >
                         {currentIdx}
                       </span>
-                      <span className="text-[11.5px] font-bold text-slate-950 font-sans shrink-0">
-                        {displaySim}
-                      </span>
-                      <span className={`px-2 py-0.5 rounded-full text-[8.5px] font-semibold leading-none ${badge.tagBg}`}>
+                      <span className={`inline-flex h-9 shrink-0 items-center justify-center rounded-full px-7 text-center text-[12px] font-semibold leading-none ${badge.tagBg.split(' ')[0]} text-black`}>
                         {typeLabel}
                       </span>
                     </div>
-
-                    {/* Line 2: Source Title */}
-                    <div className="pt-0.5">
-                      <span className="text-[10.5px] font-semibold text-slate-950 truncate block">
+                    <div className="mt-3 min-w-0">
+                      <span className="block min-w-0 truncate text-[13.5px] font-semibold text-slate-900">
                         {s.name}
                       </span>
+                      <span className="mt-0.5 block pr-[155px] text-right text-[13.5px] font-semibold text-slate-900">{displaySim}</span>
                     </div>
                   </div>
                 );

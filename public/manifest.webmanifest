@@ -1,0 +1,19 @@
+{
+  "id": "/",
+  "name": "TurnitScope",
+  "short_name": "TurnitScope",
+  "description": "TurnitScope - AI detection, plagiarism checking, and report management.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0a0f1d",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

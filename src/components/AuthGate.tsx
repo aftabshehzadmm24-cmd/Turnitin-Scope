@@ -1,17 +1,14 @@
 import React, { useState } from 'react';
-import { TurnitScopeLogo } from './TurnitScopeLogo';
+import { OriginalityCheckLogo } from './OriginalityCheckLogo';
+import { InstallAppButton } from './InstallAppButton';
 import {
-  ShieldCheck,
   AlertCircle,
-  Sparkles,
   Loader2,
-  ShieldAlert,
-  FileSearch,
-  Cpu,
-  Lock,
   KeyRound,
+  Sparkles,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { getGoogleAuthErrorMessage } from '../lib/firebase';
 
 export const AuthGate: React.FC = () => {
   const { signInWithGoogleAuth } = useApp();
@@ -26,8 +23,21 @@ export const AuthGate: React.FC = () => {
     try {
       await signInWithGoogleAuth();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Google authentication failed';
-      setErrorMessage(msg);
+      // Suppress user-initiated popup dismissals — not a real error
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        msg.toLowerCase().includes('closed before') ||
+        msg.toLowerCase().includes('popup-closed') ||
+        msg.toLowerCase().includes('cancelled-popup') ||
+        msg.toLowerCase().includes('closed by user')
+      ) {
+        // User just closed the popup — silently ignore
+        setIsLoading(false);
+        return;
+      }
+      const errorMsg = getGoogleAuthErrorMessage(err)
+        || (err instanceof Error ? err.message : 'Google authentication failed');
+      setErrorMessage(errorMsg);
     } finally {
       setIsLoading(false);
     }
@@ -35,47 +45,36 @@ export const AuthGate: React.FC = () => {
 
   return (
     <div
-      className="min-h-screen w-full flex items-center justify-center p-4 sm:p-6 bg-[#0a0f1d] text-slate-100 font-['Plus_Jakarta_Sans',sans-serif] relative overflow-hidden"
+      className="relative flex min-h-[100svh] w-full items-center justify-center overflow-hidden bg-[linear-gradient(135deg,#0b1020_0%,#1e1b4b_52%,#0f3b4a_100%)] px-4 py-8 font-['Plus_Jakarta_Sans',sans-serif] text-slate-100 sm:px-6"
       id="auth-gate-container"
     >
-      {/* Background ambient lighting */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#1f293710_1px,transparent_1px),linear-gradient(to_bottom,#1f293710_1px,transparent_1px)] bg-[size:4rem_4rem] pointer-events-none" />
-
-      <div className="w-full max-w-md relative z-10 space-y-5">
-        {/* Brand & Security Notice */}
-        <div className="text-center space-y-2.5">
-          <div className="flex justify-center pb-1">
-            <TurnitScopeLogo size="lg" variant="dark" showSubtitle={true} />
+      <div className="relative z-10 mx-auto w-full max-w-md space-y-6">
+          <div className="space-y-3 text-center">
+            <div className="flex justify-center">
+              <OriginalityCheckLogo size="md" variant="dark" showSubtitle={false} />
+            </div>
+            <p className="text-xs font-medium tracking-wide text-slate-300">
+              A clearer view of your documents
+            </p>
           </div>
 
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-950/90 border border-indigo-500/30 text-indigo-300 text-xs font-semibold shadow-inner">
-            <ShieldAlert className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-            <span>Turnitin Similarity Engine • Institutional Gateway</span>
-          </div>
-          <p className="text-xs text-slate-400 max-w-sm mx-auto">
-            Access institutional originality reports, AI similarity scoring, and academic citation analysis.
-          </p>
-        </div>
-
-        {/* Main Card */}
-        <div className="bg-[#141c2e]/95 border border-slate-700/70 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-xl space-y-5">
+        <div className="glass-panel space-y-6 rounded-2xl border border-white/10 bg-[#111a2d]/95 p-5 shadow-2xl shadow-black/30 ring-1 ring-indigo-300/10 sm:p-8">
           {/* Navigation Pill Switcher */}
-          <div className="grid grid-cols-2 p-1 bg-slate-900/90 rounded-xl border border-slate-800">
+          <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/10 bg-[#0b1220] p-1" role="group" aria-label="Choose sign-in type">
             <button
               type="button"
               onClick={() => {
                 setActiveTab('google');
                 setErrorMessage(null);
               }}
-              className={`py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer ${
+              aria-pressed={activeTab === 'google'}
+              className={`flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/50 ${
                 activeTab === 'google'
-                  ? 'bg-indigo-600 text-white shadow'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                  ? 'bg-indigo-500 text-white shadow-sm shadow-indigo-950/40'
+                  : 'text-slate-300 hover:bg-white/5 hover:text-white'
               }`}
             >
-              <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 shrink-0">
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0" aria-hidden="true">
                 <path
                   fill="currentColor"
                   d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -102,13 +101,14 @@ export const AuthGate: React.FC = () => {
                 setActiveTab('admin');
                 setErrorMessage(null);
               }}
-              className={`py-2 px-3 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+              aria-pressed={activeTab === 'admin'}
+              className={`flex min-h-11 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/50 ${
                 activeTab === 'admin'
-                  ? 'bg-amber-500 text-slate-950 shadow font-extrabold'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                  ? 'bg-indigo-500 text-white shadow-sm shadow-indigo-950/40'
+                  : 'text-slate-300 hover:bg-white/5 hover:text-white'
               }`}
             >
-              <KeyRound className="w-3.5 h-3.5 shrink-0" />
+              <KeyRound className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <span>Admin Portal</span>
             </button>
           </div>
@@ -116,12 +116,15 @@ export const AuthGate: React.FC = () => {
           {/* TAB 1: Google User Sign-In */}
           {activeTab === 'google' && (
             <div className="space-y-5 animate-in fade-in duration-200">
-              <div className="text-center space-y-1">
-                <h2 className="text-lg font-bold text-white tracking-tight">
-                  Academic Client Sign-In
+              <div className="space-y-1 text-center">
+                <span className="mx-auto mb-2 flex h-11 w-11 items-center justify-center rounded-xl border border-cyan-300/20 bg-gradient-to-br from-indigo-400/20 to-cyan-300/10 text-cyan-200">
+                  <Sparkles className="h-5 w-5" aria-hidden="true" />
+                </span>
+                <h2 className="text-2xl font-bold tracking-tight text-white">
+                  Welcome back
                 </h2>
-                <p className="text-xs text-slate-400">
-                  Instant access using your Google or institutional account.
+                <p className="text-sm text-slate-300">
+                  Sign in to check documents and manage reports.
                 </p>
               </div>
 
@@ -131,16 +134,16 @@ export const AuthGate: React.FC = () => {
                   onClick={handleGoogleAuth}
                   disabled={isLoading}
                   id="btn-gate-google-auth"
-                  className="w-full py-3.5 px-5 rounded-2xl bg-white hover:bg-slate-100 text-slate-900 font-bold text-sm transition duration-150 flex items-center justify-center gap-3 shadow-xl active:scale-98 disabled:opacity-70 group cursor-pointer border border-slate-200"
+                  className="group flex min-h-14 w-full cursor-pointer items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-sm font-bold text-slate-800 shadow-sm transition hover:border-cyan-200 hover:bg-slate-50 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-cyan-300/30 disabled:cursor-wait disabled:opacity-70"
                 >
                   {isLoading ? (
                     <>
-                      <Loader2 className="w-5 h-5 animate-spin text-slate-700" />
+                      <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
                       <span>Signing in with Google...</span>
                     </>
                   ) : (
                     <>
-                      <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0">
+                      <svg viewBox="0 0 24 24" className="h-5 w-5 shrink-0" aria-hidden="true">
                         <path
                           fill="#4285F4"
                           d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -159,30 +162,8 @@ export const AuthGate: React.FC = () => {
                         />
                       </svg>
                       <span>Continue with Google</span>
-                      <span className="ml-auto text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full flex items-center gap-1">
-                        <ShieldCheck className="w-3 h-3 text-emerald-600" />
-                        Instant
-                      </span>
                     </>
                   )}
-                </button>
-                <p className="text-[11px] text-slate-400 text-center leading-relaxed">
-                  Compatible with institutional Google Workspace and personal Google accounts.
-                </p>
-              </div>
-
-              {/* Quick switch to Admin */}
-              <div className="text-center pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveTab('admin');
-                    setErrorMessage(null);
-                  }}
-                  className="text-xs text-amber-400/90 hover:text-amber-300 font-medium inline-flex items-center gap-1.5 cursor-pointer underline underline-offset-2 transition"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  <span>Master Administrator Login (Google) →</span>
                 </button>
               </div>
             </div>
@@ -191,10 +172,14 @@ export const AuthGate: React.FC = () => {
           {/* TAB 2: Administrator Portal */}
           {activeTab === 'admin' && (
             <div className="space-y-5 animate-in fade-in duration-200">
-              <div className="text-center space-y-1">
-                <h2 className="text-lg font-bold text-white tracking-tight">
-                  Admin Sign-In
+              <div className="space-y-1 text-center">
+                <span className="mx-auto mb-2 flex h-11 w-11 items-center justify-center rounded-xl border border-cyan-300/20 bg-gradient-to-br from-indigo-400/20 to-cyan-300/10 text-cyan-200">
+                  <KeyRound className="h-5 w-5" aria-hidden="true" />
+                </span>
+                <h2 className="text-2xl font-bold tracking-tight text-white">
+                  Admin sign-in
                 </h2>
+                <p className="text-sm text-slate-300">Sign in to continue to your admin workspace.</p>
               </div>
 
               {/* Submit Admin Button */}
@@ -203,11 +188,11 @@ export const AuthGate: React.FC = () => {
                 onClick={handleGoogleAuth}
                 disabled={isLoading}
                 id="btn-gate-admin-submit"
-                className="w-full py-3 px-5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-sm transition duration-150 flex items-center justify-center gap-2 shadow-xl active:scale-98 disabled:opacity-70 cursor-pointer"
+                className="flex min-h-14 w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-cyan-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-indigo-950/30 transition hover:from-indigo-400 hover:to-cyan-500 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-cyan-300/30 disabled:cursor-wait disabled:opacity-70"
               >
                 {isLoading ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
+                    <Loader2 className="h-4 w-4 animate-spin text-white" />
                     <span>Opening Google sign-in...</span>
                   </>
                 ) : (
@@ -225,7 +210,7 @@ export const AuthGate: React.FC = () => {
                     setActiveTab('google');
                     setErrorMessage(null);
                   }}
-                  className="text-xs text-slate-400 hover:text-slate-200 cursor-pointer underline"
+                  className="min-h-11 cursor-pointer px-3 text-xs font-medium text-slate-300 underline underline-offset-4 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/50"
                 >
                   ← Return to User Sign-In
                 </button>
@@ -235,40 +220,16 @@ export const AuthGate: React.FC = () => {
 
           {/* Feedback messages */}
           {errorMessage && (
-            <div className="p-3.5 rounded-2xl bg-rose-950/60 border border-rose-500/50 text-rose-200 text-xs flex items-start gap-2.5 text-left animate-in fade-in duration-200">
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <div className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-left text-xs text-rose-800 animate-in fade-in duration-200" role="alert">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
               <div className="space-y-1.5 flex-1">
-                <p className="font-semibold text-rose-100">Authentication Notice</p>
-                <p className="text-[11px] text-rose-200/90 leading-relaxed">{errorMessage}</p>
+                <p className="font-semibold text-rose-900">Sign-in failed</p>
+                <p className="text-[11px] leading-relaxed text-rose-700">{errorMessage}</p>
               </div>
             </div>
           )}
-
-          {/* Features highlight */}
-          {activeTab === 'google' && <div className="grid grid-cols-2 gap-2.5 pt-1">
-            <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 flex items-start gap-2.5">
-              <FileSearch className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
-              <div>
-                <p className="text-xs font-semibold text-white">Originality Check</p>
-                <p className="text-[10px] text-slate-400 leading-tight mt-0.5">Cross-journal & repository matching</p>
-              </div>
-            </div>
-
-            <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 flex items-start gap-2.5">
-              <Cpu className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
-              <div>
-                <p className="text-xs font-semibold text-white">AI Content Score</p>
-                <p className="text-[10px] text-slate-400 leading-tight mt-0.5">Linguistic entropy metrics</p>
-              </div>
-            </div>
-          </div>}
-
-          {/* Footer Security Badge */}
-          {activeTab === 'google' && <div className="pt-2 border-t border-slate-700/50 flex items-center justify-center gap-2 text-[11px] text-slate-400">
-            <Lock className="w-3.5 h-3.5 text-slate-500" />
-            <span>Encrypted end-to-end via Firebase Cloud Identity</span>
-          </div>}
         </div>
+        <InstallAppButton variant="dark" />
       </div>
     </div>
   );

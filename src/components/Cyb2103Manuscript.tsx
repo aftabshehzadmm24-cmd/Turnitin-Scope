@@ -5,6 +5,7 @@ import {
   TurnitinPageFooter,
   getBadgeColor,
 } from './TurnitinOfficialPages';
+import { isExcludedFromHighlighting } from '../utils/documentParser';
 
 interface Cyb2103ManuscriptProps {
   report: ScanReport;
@@ -224,7 +225,7 @@ export const Cyb2103ManuscriptPage: React.FC<Cyb2103ManuscriptProps> = ({
 
   // Highlighting helpers matching Turnitin official styles
   const hlSim = (text: string, sourceNum: number = 1, isBlue: boolean = false) => {
-    if (!isSimilarity) return <span>{text}</span>;
+    if (!isSimilarity || isExcludedFromHighlighting(text)) return <span>{text}</span>;
     if (isBlue || sourceNum === 2) {
       return (
         <span
@@ -249,7 +250,7 @@ export const Cyb2103ManuscriptPage: React.FC<Cyb2103ManuscriptProps> = ({
     if (isSimilarity || report.aiScore <= 20) return <span>{text}</span>;
     return (
       <span
-        style={{ backgroundColor: '#93c5fd', color: '#1e3a8a' }}
+        style={{ backgroundColor: '#AFEBF0', color: '#000000' }}
         className="rounded-xs px-1 py-0.5 inline font-normal"
       >
         {text}
@@ -292,9 +293,7 @@ export const Cyb2103ManuscriptPage: React.FC<Cyb2103ManuscriptProps> = ({
           <div className="space-y-3">
             <div className="space-y-0.5">
               <div className="flex items-start gap-2">
-                <div className="w-6 shrink-0 text-right pt-0.5">
-                  {isSimilarity && renderBadge(1, 'badge-title-1')}
-                </div>
+                <div className="w-6 shrink-0 text-right pt-0.5" />
                 <div className="flex-1">
                   <h1 className="text-sm font-bold text-slate-900 leading-tight">
                     {mark('CYB2103 | CYBER RISK MANAGEMENT', 1, false, false)}
@@ -315,9 +314,7 @@ export const Cyb2103ManuscriptPage: React.FC<Cyb2103ManuscriptProps> = ({
             {/* Executive Summary */}
             <div className="space-y-1.5 pt-1">
               <div className="flex items-start gap-2">
-                <div className="w-6 shrink-0 text-right pt-0.5">
-                  {isSimilarity && renderBadge(1, 'badge-exec-1')}
-                </div>
+                <div className="w-6 shrink-0 text-right pt-0.5" />
                 <h4 className="text-xs font-bold text-slate-900 flex-1">
                   {mark('Executive Summary', 1, false, false)}
                 </h4>
@@ -343,9 +340,7 @@ export const Cyb2103ManuscriptPage: React.FC<Cyb2103ManuscriptProps> = ({
             {/* 2. Cyber-Risk Identification */}
             <div className="space-y-1 pt-1">
               <div className="flex items-start gap-2">
-                <div className="w-6 shrink-0 text-right pt-0.5">
-                  {isSimilarity && renderBadge(1, 'badge-risk-id')}
-                </div>
+                <div className="w-6 shrink-0 text-right pt-0.5" />
                 <h4 className="text-xs font-bold text-slate-900 flex-1">
                   {mark('2. Cyber-Risk Identification', 1, false, false)}
                 </h4>
@@ -452,9 +447,7 @@ export const Cyb2103ManuscriptPage: React.FC<Cyb2103ManuscriptProps> = ({
             {/* Figure 1 Heatmap */}
             <div className="space-y-1">
               <div className="flex items-start gap-2">
-                <div className="w-6 shrink-0 text-right pt-0.5">
-                  {isSimilarity && renderBadge(1, 'badge-fig1')}
-                </div>
+                <div className="w-6 shrink-0 text-right pt-0.5" />
                 <div className="flex-1">
                   <div className="text-[10.5px] font-semibold text-slate-800">
                     {mark('Figure 1. Likelihood-impact heat map used for the qualitative assessment (author-developed; green = lower, red = higher).', 1, false, false)}
@@ -572,9 +565,7 @@ export const Cyb2103ManuscriptPage: React.FC<Cyb2103ManuscriptProps> = ({
                 Figure 2. Inherent versus target residual risk scores after the proposed control package.
               </div>
               <div className="flex items-start gap-2">
-                <div className="w-6 shrink-0 text-right pt-2">
-                  {isSimilarity && renderBadge(1, 'badge-fig2')}
-                </div>
+                <div className="w-6 shrink-0 text-right pt-2" />
                 <div className="flex-1">
                   <Cyb2103RiskBarChart />
                 </div>

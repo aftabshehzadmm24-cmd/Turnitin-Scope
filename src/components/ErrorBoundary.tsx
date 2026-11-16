@@ -1,6 +1,6 @@
-import React from 'react';
+﻿import React from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
-import { TurnitScopeLogo } from './TurnitScopeLogo';
+import { OriginalityCheckLogo } from './OriginalityCheckLogo';
 
 export interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -54,7 +54,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
         <div className="min-h-screen bg-[#0a0f1d] flex items-center justify-center p-4 sm:p-6 text-slate-100 font-['Plus_Jakarta_Sans',sans-serif]">
           <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-5 text-center">
             <div className="flex justify-center">
-              <TurnitScopeLogo size="md" variant="dark" showSubtitle={true} />
+              <OriginalityCheckLogo size="md" variant="dark" showSubtitle={true} />
             </div>
 
             <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto text-xl">

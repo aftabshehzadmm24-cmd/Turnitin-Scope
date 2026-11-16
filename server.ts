@@ -1,6 +1,9 @@
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import fs from "fs";
+import { analyzeTextWithTruthScan } from "./server/aiDetection.ts";
+import { analyzeTextForPlagiarism } from "./server/plagiarismDetection.ts";
 import { convertDocxToPdf } from "./server/docxConverter.ts";
 import { getAvailablePort } from "./server/port.ts";
 
@@ -20,16 +23,23 @@ async function startServer() {
     .split(",")
     .map(origin => origin.trim())
     .filter(Boolean);
+
+  // Always allow the production Vercel frontend and localhost in dev
+  const builtInOrigins = [
+    "https://originality-check-pi.vercel.app",
+  ];
+
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     const isLocalDevelopment = process.env.NODE_ENV !== "production"
       && (origin === "http://localhost:3000" || origin === "http://127.0.0.1:3000");
+    const allAllowed = [...builtInOrigins, ...configuredOrigins];
 
-    if (origin && (configuredOrigins.includes(origin) || isLocalDevelopment)) {
+    if (origin && (allAllowed.includes(origin) || isLocalDevelopment)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
     }
 
     if (req.method === "OPTIONS") {
@@ -44,7 +54,27 @@ async function startServer() {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
-  // DOCX to PDF conversion using in-memory mammoth and pdf-lib
+  app.post("/api/ai-detect", async (req, res) => {
+    try {
+      const result = await analyzeTextWithTruthScan(req.get("Authorization"), req.body?.text);
+      return res.status(result.status).json(result.body);
+    } catch (err: any) {
+      console.error("Unhandled error in /api/ai-detect:", err);
+      return res.status(500).json({ error: "AI detection endpoint returned HTTP 500. No score was generated." });
+    }
+  });
+
+  app.post("/api/plagiarism-detect", async (req, res) => {
+    try {
+      const result = await analyzeTextForPlagiarism(req.body?.text);
+      return res.status(result.status).json(result.body);
+    } catch (err: any) {
+      console.error("Unhandled error in /api/plagiarism-detect:", err);
+      return res.status(500).json({ error: "Plagiarism detection endpoint returned HTTP 500." });
+    }
+  });
+
+  // DOCX to PDF conversion using server-side LibreOffice
   app.post("/api/convert-docx", async (req, res) => {
     try {
       const { docxBase64, fileName } = req.body;

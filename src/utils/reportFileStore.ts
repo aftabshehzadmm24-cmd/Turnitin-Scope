@@ -1,4 +1,4 @@
-const DATABASE_NAME = 'turnitscope_report_files_v1';
+﻿const DATABASE_NAME = 'turnitscope_report_files_v1';
 const STORE_NAME = 'reportFiles';
 const DATABASE_VERSION = 1;
 

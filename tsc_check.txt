@@ -1,0 +1,5 @@
+﻿src/context/AppContext.tsx(1066,19): error TS2345: Argument of type '{ type: string; }' is not assignable to parameter of type 'string'.
+src/context/AppContext.tsx(1273,17): error TS2345: Argument of type '{ type: string; }' is not assignable to parameter of type 'string'.
+src/context/AppContext.tsx(1425,19): error TS2345: Argument of type '{ type: string; }' is not assignable to parameter of type 'string'.
+src/context/AppContext.tsx(1436,21): error TS2339: Property 'forEach' does not exist on type '{ empty: boolean; docs: QueryDocumentSnapshot<DocumentData>[]; size: number; }'.
+src/context/AppContext.tsx(1489,20): error TS2339: Property 'forEach' does not exist on type '{ empty: boolean; docs: QueryDocumentSnapshot<DocumentData>[]; size: number; }'.

@@ -5,6 +5,7 @@ import {
   TurnitinPageFooter,
   getBadgeColor,
 } from './TurnitinOfficialPages';
+import { isExcludedFromHighlighting } from '../utils/documentParser';
 
 interface KunalManuscriptProps {
   report: ScanReport;
@@ -38,7 +39,7 @@ export const KunalManuscriptPage: React.FC<KunalManuscriptProps> = ({
   };
 
   const mark = (text: string, srcNum: number, isBlue: boolean = false) => {
-    if (!isSimilarity) return <span>{text}</span>;
+    if (!isSimilarity || isExcludedFromHighlighting(text)) return <span>{text}</span>;
 
     if (isBlue || srcNum === 2) {
       return (

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useApp } from '../context/AppContext';
 import { ScanReport } from '../types';
 import {
   TurnitinCoverPage,
@@ -35,6 +36,7 @@ export const TurnitinOfficialMultiPageReport: React.FC<TurnitinOfficialMultiPage
   defaultType = 'similarity',
   allowBothModes = false,
 }) => {
+  const { currentUser } = useApp();
   const [reportType, setReportType] = useState<'similarity' | 'ai'>(defaultType);
   const [currentPageView, setCurrentPageView] = useState<number | 'all'>('all');
   const [isExporting, setIsExporting] = useState(false);
@@ -73,7 +75,7 @@ export const TurnitinOfficialMultiPageReport: React.FC<TurnitinOfficialMultiPage
       }
       await downloadReportPdf(report, typeToDownload, (current, total) => {
         setExportProgress({ current, total });
-      });
+      }, currentUser?.name);
     } catch (err) {
       console.error('PDF generation error:', err);
     } finally {

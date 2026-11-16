@@ -1,4 +1,4 @@
-import type { User } from '../types';
+﻿import type { User } from '../types';
 import { ADMIN_EMAIL } from './firebase';
 
 export const isAdminEmail = (email?: string | null): boolean => {
@@ -27,7 +27,7 @@ export function buildUserFromAuthProfile(
     id: authProfile.uid || `usr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     name:
       authProfile.displayName ||
-      (isAdmin ? 'TurnitScope Administrator' : email ? email.split('@')[0] : 'Academic User') ||
+      (isAdmin ? 'Turnitin Scope Administrator' : email ? email.split('@')[0] : 'Academic User') ||
       'Academic User',
     email,
     role: isAdmin ? 'admin' : 'client',

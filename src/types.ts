@@ -58,15 +58,20 @@ export interface ManuscriptContentPage {
   marginBadges?: Array<{ textAnchor: string; badgeNumbers: number[] }>;
 }
 
+export type ReportStyle = 'classic' | 'new';
+
 export interface ScanReport {
   id: string;
   userId?: string;
+  ownerName?: string;
   expiresAt?: number;
   title: string;
   fileName: string;
   fileSize: string;
   author: string;
+  classicAuthor?: string;
   type: 'AI Detection' | 'Plagiarism Check' | 'Both';
+  reportStyle?: ReportStyle;
   status: 'Completed' | 'Analyzing' | 'Failed';
   plagiarismScore: number; // percentage, e.g. 14
   aiScore: number; // percentage, e.g. 85

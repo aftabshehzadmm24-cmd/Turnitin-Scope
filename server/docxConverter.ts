@@ -88,24 +88,17 @@ function getLibreOfficeBinary(): string | null {
 }
 
 /**
- * Converts a DOCX file directly into an authentic, searchable, vector PDF
- * using server-side headless LibreOffice.
+ * Converts a DOCX file into a searchable vector PDF using server-side LibreOffice.
  *
- * This preserves:
- * - 100% exact page sequence, breaks, and layout
- * - All tables, borders, row heights, and column widths
- * - All images, logos, stickers, and embedded graphics
- * - Table of Contents (TOC) and hyperlinks
- * - Exact fonts, formatting, headers, and footers
- * - Full vector text selection, copy-pasting, and searchability
+ * LibreOffice preserves document structure and formatting better than rebuilding
+ * pages from extracted text. Exact pagination can still vary with available fonts.
  */
 export async function convertDocxToPdf(docxBase64: string, originalFileName = 'document.docx'): Promise<ConvertDocxResult> {
   const libreOfficeBin = getLibreOfficeBinary();
   if (!libreOfficeBin) {
-    console.error('LibreOffice binary not found on server.');
     return {
       success: false,
-      error: 'LibreOffice is not installed or accessible on this server.',
+      error: 'LibreOffice is required to preserve DOCX page layout but is not installed on the conversion server.',
     };
   }
 
@@ -129,17 +122,21 @@ export async function convertDocxToPdf(docxBase64: string, originalFileName = 'd
     if (extension === '.docx') {
       // Repair empty table-property extensions that some Word exporters place
       // inside table rows; LibreOffice rejects these nodes while Word/Mammoth tolerate them.
-      const docxZip = await JSZip.loadAsync(docxBuffer);
-      const documentXml = docxZip.file('word/document.xml');
-      if (documentXml) {
-        const xml = await documentXml.async('string');
-        const repairedXml = xml
-          .split('<w:tblPrEx></w:tblPrEx>').join('')
-          .split('<w:tblPrEx/>').join('');
-        if (repairedXml !== xml) {
-          docxZip.file('word/document.xml', repairedXml);
-          sourceBuffer = await docxZip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+      try {
+        const docxZip = await JSZip.loadAsync(docxBuffer);
+        const documentXml = docxZip.file('word/document.xml');
+        if (documentXml) {
+          const xml = await documentXml.async('string');
+          const repairedXml = xml
+            .split('<w:tblPrEx></w:tblPrEx>').join('')
+            .split('<w:tblPrEx/>').join('');
+          if (repairedXml !== xml) {
+            docxZip.file('word/document.xml', repairedXml);
+            sourceBuffer = await docxZip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+          }
         }
+      } catch (zipErr) {
+        console.warn('DOCX zip repair skipped:', zipErr);
       }
     }
     fs.writeFileSync(inputDocxPath, sourceBuffer);
@@ -153,11 +150,15 @@ export async function convertDocxToPdf(docxBase64: string, originalFileName = 'd
     for (const [attemptIndex, exportFilter] of exportFilters.entries()) {
       const attemptProfileDir = path.join(tmpDir, `profile-${attemptIndex + 1}`);
       fs.mkdirSync(attemptProfileDir, { recursive: true });
+      const userInstallation = pathToFileURL(attemptProfileDir).href;
       const args = [
         '--headless',
         '--nologo',
         '--norestore',
-        `-env:UserInstallation=${pathToFileURL(attemptProfileDir).href}`,
+        '--invisible',
+        '--nofirststartwizard',
+        '--view',
+        `-env:UserInstallation=${userInstallation}`,
         '--convert-to',
         exportFilter,
         '--outdir',
@@ -166,8 +167,33 @@ export async function convertDocxToPdf(docxBase64: string, originalFileName = 'd
       ];
 
       try {
-        const result = await execFileAsync(libreOfficeBin, args, { timeout: 90000, maxBuffer: 10 * 1024 * 1024 });
-        lastConversionDiagnostic = `${result.stdout || ''} ${result.stderr || ''}`.trim();
+        if (process.platform !== 'win32') {
+          const env: NodeJS.ProcessEnv = { ...process.env, HOME: '/tmp', SAL_USE_VCLPLUGIN: 'svp' };
+          if (!env.DISPLAY) env.DISPLAY = ':99';
+          // Try direct first (Xvfb started in container)
+          try {
+            const result = await execFileAsync(libreOfficeBin, args, { timeout: 180000, maxBuffer: 30 * 1024 * 1024, env });
+            lastConversionDiagnostic = `${result.stdout || ''} ${result.stderr || ''}`.trim();
+          } catch (e: any) {
+            lastConversionDiagnostic = `${e?.stdout || ''} ${e?.stderr || ''} ${e?.message || ''}`.trim();
+            // try with xvfb-run if direct fails
+            if (fs.existsSync('/usr/bin/xvfb-run')) {
+              try {
+                const xvfbArgs = ['-a', '--server-args=-screen 0 1280x1024x24', libreOfficeBin, ...args];
+                const result = await execFileAsync('xvfb-run', xvfbArgs, { timeout: 180000, maxBuffer: 30 * 1024 * 1024, env });
+                lastConversionDiagnostic = `${result.stdout || ''} ${result.stderr || ''}`.trim();
+              } catch (e2: any) {
+                lastConversionDiagnostic = `${e2?.stdout || ''} ${e2?.stderr || ''} ${e2?.message || ''}`.trim();
+                throw e2;
+              }
+            } else {
+              throw e;
+            }
+          }
+        } else {
+          const result = await execFileAsync(libreOfficeBin, args, { timeout: 180000, maxBuffer: 30 * 1024 * 1024 });
+          lastConversionDiagnostic = `${result.stdout || ''} ${result.stderr || ''}`.trim();
+        }
       } catch (conversionError: any) {
         lastConversionDiagnostic = `${conversionError?.stdout || ''} ${conversionError?.stderr || ''} ${conversionError?.message || ''}`.trim();
       }
@@ -178,7 +204,11 @@ export async function convertDocxToPdf(docxBase64: string, originalFileName = 'd
     }
 
     if (!generatedPdfPath) {
-      throw new Error(`LibreOffice did not produce any PDF output. ${lastConversionDiagnostic}`.trim());
+      console.error('LibreOffice failed to create a PDF:', lastConversionDiagnostic || 'no output');
+      return {
+        success: false,
+        error: 'LibreOffice could not render this DOCX. Save the document as PDF in Word and upload the PDF to preserve its page layout.',
+      };
     }
 
     const pdfBuffer = fs.readFileSync(generatedPdfPath);
@@ -197,7 +227,7 @@ export async function convertDocxToPdf(docxBase64: string, originalFileName = 'd
     console.error('LibreOffice DOCX to PDF conversion error:', err);
     return {
       success: false,
-      error: err?.message || 'LibreOffice conversion failed',
+      error: 'LibreOffice could not render this DOCX. Save the document as PDF in Word and upload the PDF to preserve its page layout.',
     };
   } finally {
     try {

@@ -93,9 +93,9 @@ export const AuthenticPdfManuscriptPage: React.FC<AuthenticPdfManuscriptPageProp
 						overlays.push({
 							str: item.str,
 							left,
-							top: Math.max(0, baseline - fontSize * 0.88),
+							top: Math.max(0, baseline - fontSize * 0.78),
 							width: Math.max((item.width || 0) * baseViewport.scale, 4),
-							height: Math.max(fontSize, 12),
+							height: Math.max(fontSize * 0.88, 1),
 							fontSize,
 						});
 					}

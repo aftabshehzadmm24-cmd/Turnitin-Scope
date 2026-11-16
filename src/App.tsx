@@ -9,14 +9,14 @@ import { ReportModal } from './components/ReportModal';
 import { ScanProgressModal } from './components/ScanProgressModal';
 import { ProfileEditModal } from './components/ProfileEditModal';
 import { AuthGate } from './components/AuthGate';
-import { TurnitScopeLogo } from './components/TurnitScopeLogo';
+import { OriginalityCheckLogo } from './components/OriginalityCheckLogo';
 import { ToastNotificationBanner } from './components/ToastNotificationBanner';
-import { ScanReport } from './types';
 import { CheckCircle2, AlertCircle, Info, Loader2 } from 'lucide-react';
 
 const IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const IDLE_WARNING_MS = 30 * 1000;
 const ACTIVITY_STORAGE_PREFIX = 'turnitscope:last-activity:';
+const THEME_STORAGE_KEY = 'turnitscope:theme';
 
 const AppContent: React.FC = () => {
   const {
@@ -34,8 +34,19 @@ const AppContent: React.FC = () => {
     signOutAuth,
   } = useApp();
   const [showIdleWarning, setShowIdleWarning] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(() => localStorage.getItem(THEME_STORAGE_KEY) === 'dark');
   const signOutAuthRef = useRef(signOutAuth);
   signOutAuthRef.current = signOutAuth;
+
+  useEffect(() => {
+    const theme = isDarkMode ? 'dark' : 'light';
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem(THEME_STORAGE_KEY, theme);
+    document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute(
+      'content',
+      isDarkMode ? '#151c26' : '#f5f7fa',
+    );
+  }, [isDarkMode]);
 
   useEffect(() => {
     if (!firebaseUser?.uid) {
@@ -103,6 +114,11 @@ const AppContent: React.FC = () => {
     };
   }, [firebaseUser?.uid, isScanning]);
 
+  useEffect(() => {
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    window.scrollTo({ top: 0, behavior });
+  }, [activeTab]);
+
   const getPageInfo = () => {
     switch (activeTab) {
       case 'dashboard':
@@ -120,7 +136,7 @@ const AppContent: React.FC = () => {
   if (isAuthLoading) {
     return (
       <div className="min-h-screen bg-[#0a0f1d] flex flex-col items-center justify-center gap-4 text-slate-100 font-['Plus_Jakarta_Sans',sans-serif]">
-        <TurnitScopeLogo size="lg" showSubtitle={true} />
+        <OriginalityCheckLogo size="lg" showSubtitle={true} />
         <div className="flex items-center gap-2 text-indigo-400 text-sm mt-4">
           <Loader2 className="w-5 h-5 animate-spin" />
           <span>Verifying authentication...</span>
@@ -164,22 +180,27 @@ const AppContent: React.FC = () => {
       {isAdmin ? (
         <AdminPanel />
       ) : (
-        <div className="min-h-screen bg-[#f8fafc] flex flex-col md:flex-row relative font-['Plus_Jakarta_Sans',sans-serif] overflow-x-hidden" id="app-client-root">
+        <div className="relative flex min-h-screen flex-col bg-[#f8fafc] font-['Plus_Jakarta_Sans',sans-serif] md:flex-row" id="app-client-root">
           {/* Client Left Sidebar */}
           <ClientSidebar />
 
           {/* Main Content Area */}
           <div className="flex-1 flex flex-col min-w-0">
             {/* Header */}
-            <ClientHeader title={pageInfo.title} iconSuffix={pageInfo.iconSuffix} />
+            <ClientHeader
+              title={pageInfo.title}
+              iconSuffix={pageInfo.iconSuffix}
+              isDarkMode={isDarkMode}
+              onToggleDarkMode={() => setIsDarkMode(value => !value)}
+            />
 
             {/* View Content */}
-            <main className="flex-1 p-4 sm:p-6 md:p-8 max-w-7xl w-full mx-auto">
+            <main className="mx-auto w-full max-w-7xl flex-1 px-3 py-4 pb-[calc(2rem+env(safe-area-inset-bottom))] sm:p-5 lg:p-8">
               {activeTab === 'dashboard' && (
                 <DashboardView />
               )}
               {activeTab === 'reports' && (
-                <ReportsView onOpenReport={(rep: ScanReport) => setSelectedReport(rep)} />
+                <ReportsView />
               )}
               {activeTab === 'redeem' && <RedeemCodeView />}
             </main>
@@ -201,12 +222,12 @@ const AppContent: React.FC = () => {
       {/* Scan Processing Modal Animation */}
       <ScanProgressModal />
 
-      {/* Toast Notification Banner with Auto-Diminish after 5s */}
+      {/* Keep errors visible longer so users have time to read them. */}
       {notification && (
         <ToastNotificationBanner
           notification={notification}
           onDismiss={() => setNotification(null)}
-          durationSeconds={5}
+          durationSeconds={notification.type === 'error' ? 10 : 5}
         />
       )}
     </>

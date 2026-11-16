@@ -1,7 +1,7 @@
 import jsPDF from 'jspdf';
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { BlendMode, PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
-import { ScanReport } from '../types';
+import { MatchedSource, ScanReport } from '../types';
 import { clampSimilarityScore } from './documentParser';
 import { getReportPageLayout, getReportPdfFileName } from './reportPageLayout';
 import { DEFAULT_INSTITUTION_NAME, getInstitutionName } from './institutionName';
@@ -86,10 +86,6 @@ const GRAD_CAP_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24
   <path d="M12 3L1 9l11 6 9-4.91V17h2V9L12 3z M5 13.18v4L12 21l7-3.82v-4L12 17l-7-3.82z" fill="#475569"/>
 </svg>`;
 
-const INSTITUTION_NAME_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 40" width="1120" height="80">
-  <text x="0" y="31" font-family="Arial, sans-serif" font-size="30" fill="#475569">${DEFAULT_INSTITUTION_NAME}</text>
-</svg>`;
-
 const CAUTION_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="120" height="120">
   <path d="M12 2L1 21h22L12 2zm0 3.8L19.8 19H4.2L12 5.8zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z" fill="#475569"/>
 </svg>`;
@@ -139,6 +135,7 @@ async function renderSvgToPng(svgString: string, width = 200, height = 200): Pro
 }
 
 let cachedLogoPng: string | null = null;
+let cachedAiReportLogoPng: string | null = null;
 
 async function getTurnitinLogoPng(): Promise<string> {
   if (cachedLogoPng) return cachedLogoPng;
@@ -146,16 +143,35 @@ async function getTurnitinLogoPng(): Promise<string> {
   return cachedLogoPng;
 }
 
+async function getAiReportLogoPng(): Promise<string> {
+  if (cachedAiReportLogoPng) return cachedAiReportLogoPng;
+
+  const response = await fetch('/ai-report-logo.png');
+  if (!response.ok) {
+    throw new Error(`Could not load the AI report logo (${response.status}).`);
+  }
+
+  const logoBlob = await response.blob();
+  const logoDataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        reject(new Error('Could not read the AI report logo.'));
+        return;
+      }
+      resolve(reader.result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read the AI report logo.'));
+    reader.readAsDataURL(logoBlob);
+  });
+
+  cachedAiReportLogoPng = logoDataUrl;
+  return logoDataUrl;
+}
+
 function getSourceColor(idx: number) {
-  return (
-    SOURCE_COLORS[idx] || {
-      bg: [100, 116, 139],
-      text: [255, 255, 255],
-      light: [241, 245, 249],
-      lightText: [71, 85, 105],
-      hex: '#64748b',
-    }
-  );
+  const colorIndex = ((idx - 1) % 15) + 1;
+  return SOURCE_COLORS[colorIndex] || SOURCE_COLORS[1];
 }
 
 function base64ToUint8Array(base64: string): Uint8Array {
@@ -276,8 +292,8 @@ async function mergeTurnitinCoverWithUserPdf(
             item.transform[0] * item.transform[0] + item.transform[1] * item.transform[1]
           );
           const w = (item.width || 0) * baseViewport.scale;
-          const h = Math.max(fontSize, 12);
-          const top = Math.max(0, vy - fontSize * 0.88);
+          const h = Math.max(fontSize * 0.88, 1);
+          const top = Math.max(0, vy - fontSize * 0.78);
           rawItems.push({
             str: item.str,
             left: vx,
@@ -306,7 +322,8 @@ async function mergeTurnitinCoverWithUserPdf(
             width: hl.width,
             height: hl.height,
             color: rgb(theme.pdfColor.r, theme.pdfColor.g, theme.pdfColor.b),
-            opacity: 0.58,
+            opacity: hl.type === 'ai' ? 1 : 0.58,
+            blendMode: hl.type === 'ai' ? BlendMode.Multiply : BlendMode.Normal,
           });
 
           if (hl.showBadge && hl.badgeNumber) {
@@ -650,7 +667,7 @@ function drawDanishManuscriptPdfPage(
     }
 
     doc.setFont('times', 'normal');
-    doc.setFontSize(9);
+    doc.setFontSize(8);
     doc.setTextColor(71, 85, 105);
     doc.text('2', pageWidth / 2, pageHeight - 50, { align: 'center' });
     return;
@@ -733,7 +750,7 @@ function drawDanishManuscriptPdfPage(
       }
     } else {
       if (report.aiScore >= 21 && (options?.customHlAi || sourceNum === 1 || sourceNum === 2)) {
-        doc.setFillColor(180, 215, 254); // prominent light blue
+        doc.setFillColor(138, 203, 212);
         doc.rect(margin + indent - 2, startY - 9, contentWidth - indent + 4, blockH, 'F');
 
         doc.setFont('times', 'normal');
@@ -1316,7 +1333,7 @@ export function drawCyb2103ManuscriptPdfPage(
       }
     } else {
       if (report.aiScore >= 21) {
-        doc.setFillColor(180, 215, 254);
+        doc.setFillColor(138, 203, 212);
         doc.rect(margin - 2, startY - 9, contentWidth + 4, blockH, 'F');
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(8.5);
@@ -1898,11 +1915,11 @@ export function drawUniversalManuscriptPdfPage(
       doc.text(pLines, textLeft, textY);
     } else if (hasAiSegment) {
       // AI highlight
-      doc.setFillColor(180, 215, 254);
+      doc.setFillColor(138, 203, 212);
       doc.rect(textLeft - 2, textY - 8, textWidth + 4, pHeight, 'F');
 
       // AI Badge in gutter
-      doc.setFillColor(2, 132, 199);
+      doc.setFillColor(8, 145, 178);
       doc.roundedRect(margin + 1, textY - 6, 8, 8, 1.5, 1.5, 'F');
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(4.5);
@@ -1911,7 +1928,7 @@ export function drawUniversalManuscriptPdfPage(
 
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8.5);
-      doc.setTextColor(30, 64, 175);
+      doc.setTextColor(21, 94, 117);
       doc.text(pLines, textLeft, textY);
     } else {
       // Normal text
@@ -1925,6 +1942,640 @@ export function drawUniversalManuscriptPdfPage(
   }
 }
 
+export function formatClassicSubmissionDate(dateStr?: string): string {
+  if (!dateStr) return '';
+  if (/\d{2}-[A-Za-z]{3}-\d{4}\s+\d{1,2}:\d{2}\s*(?:AM|PM)\s*\(UTC[+-]\d{4}\)/i.test(dateStr)) return dateStr;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const day = pad(d.getDate());
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = months[d.getMonth()];
+  const year = d.getFullYear();
+  let hours = d.getHours();
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12 || 12;
+  const minutes = pad(d.getMinutes());
+  return `${day}-${month}-${year} ${pad(hours)}:${minutes}${ampm} (UTC+0500)`;
+}
+
+export function formatTurnitinSubmissionId(id?: string): string {
+  if (!id) {
+    const randomNine = Math.floor(100000000 + Math.random() * 900000000).toString();
+    return `30${randomNine}`;
+  }
+  const digits = id.replace(/\D/g, '');
+  if (digits.startsWith('30') && digits.length === 11) {
+    return digits;
+  }
+  if (digits.length >= 9) {
+    return `30${digits.slice(-9)}`;
+  }
+  return `30${digits.padStart(9, '0')}`;
+}
+
+export function cleanClassicSubmissionId(id?: string): string {
+  return formatTurnitinSubmissionId(id);
+}
+
+export function formatClassicFileName(fileName?: string, title?: string, fileSize?: string): string {
+  const name = fileName || title || 'Untitled';
+  if (!fileSize) return name;
+  const cleanSize = fileSize.replace(/\s+/g, '').replace(/MB$/i, 'M').replace(/KB$/i, 'K');
+  if (name.includes(`(${cleanSize})`)) return name;
+  return `${name} (${cleanSize})`;
+}
+
+export const CLASSIC_SOURCE_PALETTE = [
+  { hex: '#ff0303', r: 255, g: 3, b: 3 },     // 1: Pure Red
+  { hex: '#e70cd6', r: 231, g: 12, b: 214 }, // 2: Magenta / Pink
+  { hex: '#8b05ff', r: 139, g: 5, b: 255 },  // 3: Purple / Violet
+  { hex: '#2563eb', r: 37, g: 99, b: 235 },   // 4: Blue
+  { hex: '#059669', r: 5, g: 150, b: 105 },  // 5: Teal / Green
+  { hex: '#ea580c', r: 234, g: 88, b: 12 },   // 6: Orange
+];
+
+export function getClassicSourceType(source: MatchedSource): string {
+  const name = (source.name || '').trim().toLowerCase();
+  if (source.type === 'student_paper' || name.startsWith('submitted to')) {
+    return 'Student Paper';
+  }
+  // If the source name looks like a domain / internet hostname or has domain extensions
+  if (
+    source.type === 'internet' ||
+    /\.(?:com|org|net|edu|in|gov|io|co|ai|pk|ac|uk|info|biz)\b/i.test(name) ||
+    name.includes('wikipedia') ||
+    name.includes('.com') ||
+    name.includes('.in') ||
+    name.includes('.edu') ||
+    name.includes('.org')
+  ) {
+    return 'Internet Source';
+  }
+  if (
+    source.type === 'publication' ||
+    name.includes('archive') ||
+    name.includes('journal') ||
+    name.includes('repository') ||
+    name.includes('sciencedirect') ||
+    name.includes('springer') ||
+    name.includes('ieee') ||
+    name.includes('researchgate')
+  ) {
+    return 'Publication';
+  }
+  return 'Internet Source';
+}
+
+export function drawClassicCoverPage(
+  pdf: jsPDF,
+  report: ScanReport,
+  authorName: string,
+  resolvedOwner: string,
+  width: number
+) {
+  // GS-1-style title page: Author name by Profile owner name
+  // Exactly matching sample position (19.5% from top), sans-serif (helvetica normal), and warm dark tone (#2c2c2c)
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(18);
+  pdf.setTextColor(44, 44, 44);
+  pdf.text(authorName, width / 2, 175, { align: 'center', maxWidth: width - 80 });
+
+  // Byline: "by " in italic, owner name in upright normal (not italic), centered together
+  pdf.setFontSize(10);
+  pdf.setFont('helvetica', 'italic');
+  const byText = 'by ';
+  const byWidth = pdf.getTextWidth(byText);
+
+  pdf.setFont('helvetica', 'normal');
+  const ownerWidth = pdf.getTextWidth(resolvedOwner);
+
+  const totalBylineWidth = byWidth + ownerWidth;
+  const startX = (width - totalBylineWidth) / 2;
+
+  pdf.setFont('helvetica', 'italic');
+  pdf.setTextColor(44, 44, 44);
+  pdf.text(byText, startX, 198);
+
+  pdf.setFont('helvetica', 'normal');
+  pdf.setTextColor(44, 44, 44);
+  pdf.text(resolvedOwner, startX + byWidth, 198);
+
+  // Thin separator rule above metadata
+  const coverMargin = 26;
+  const lineY = 735;
+  pdf.setDrawColor(225, 229, 235);
+  pdf.setLineWidth(0.5);
+  pdf.line(coverMargin, lineY, width - coverMargin, lineY);
+
+  // Bottom metadata block with bold labels and clean values matching sample format
+  const cleanId = cleanClassicSubmissionId(report.submissionId);
+  const formattedDate = formatClassicSubmissionDate(report.submissionDate || report.date);
+  const formattedFileName = formatClassicFileName(report.fileName, report.title, report.fileSize);
+  const titleDetails = [
+    { label: 'Submission date: ', value: formattedDate },
+    { label: 'Submission ID: ', value: cleanId },
+    { label: 'File name: ', value: formattedFileName },
+    { label: 'Word count: ', value: report.wordCount.toLocaleString() },
+    { label: 'Character count: ', value: report.characterCount.toLocaleString() },
+  ];
+
+  pdf.setFontSize(7.2);
+  pdf.setTextColor(17, 24, 39);
+  let metaY = 749;
+  const metaLineHeight = 11.5;
+  titleDetails.forEach(item => {
+    pdf.setFont('helvetica', 'bold');
+    pdf.setTextColor(17, 24, 39);
+    pdf.text(item.label, coverMargin, metaY);
+    const labelWidth = pdf.getTextWidth(item.label);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setTextColor(75, 85, 99);
+    pdf.text(item.value, coverMargin + labelWidth, metaY);
+    metaY += metaLineHeight;
+  });
+}
+
+export function drawClassicSummaryPage(
+  pdf: jsPDF,
+  report: ScanReport,
+  authorName: string,
+  sources: MatchedSource[],
+  width: number
+) {
+  const sumMargin = 22;
+  const contentInset = 9; // 2-3 spaces inset from divider line margin
+
+  // Header: Author name in black, unbold, starts after 2-3 spaces
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(10.5);
+  pdf.setTextColor(17, 24, 39);
+  pdf.text(authorName, sumMargin + contentInset, 42);
+
+  // Divider line 1 (crisp medium gray #999999)
+  pdf.setDrawColor(153, 153, 153);
+  pdf.setLineWidth(0.75);
+  pdf.line(sumMargin, 48, width - sumMargin, 48);
+
+  // ORIGINALITY REPORT (unbold pure red #ff0000, 25% reduced to 5.6pt, starts after 2-3 spaces)
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(5.6);
+  pdf.setTextColor(255, 0, 0);
+  pdf.text('ORIGINALITY REPORT', sumMargin + contentInset, 57);
+
+  // Divider line 2
+  pdf.setDrawColor(182, 182, 182);
+  pdf.setLineWidth(0.5);
+  pdf.line(sumMargin, 62, width - sumMargin, 62);
+
+  // 4 Metric Columns (indented consistently after 2-3 spaces)
+  const metricStartX = sumMargin + contentInset;
+  const metricUsableWidth = width - (sumMargin + contentInset) * 2;
+  const colWidth = metricUsableWidth / 4;
+  const sourceDistribution = report.sourceDistribution;
+  const metrics = [
+    { value: report.plagiarismScore ?? 0, label: 'SIMILARITY INDEX', isRed: true, isPercent: true },
+    { value: sourceDistribution?.internet ?? report.sources?.length ?? 0, label: 'INTERNET SOURCES', isRed: false, isPercent: false },
+    { value: sourceDistribution?.publications ?? 0, label: 'PUBLICATIONS', isRed: false, isPercent: false },
+    { value: sourceDistribution?.studentPapers ?? 0, label: 'STUDENT PAPERS', isRed: false, isPercent: false },
+  ];
+
+  metrics.forEach((m, idx) => {
+    const colX = metricStartX + idx * colWidth;
+    const numStr = String(m.value);
+
+    if (m.isRed) {
+      pdf.setTextColor(255, 0, 0); // Pure red #ff0000 for similarity percentage
+    } else {
+      pdf.setTextColor(0, 0, 0); // Black for other numbers
+    }
+
+    // Number (large 26 pt normal/unbold matching sample)
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(26);
+    pdf.text(numStr, colX, 92);
+    const numW = pdf.getTextWidth(numStr);
+
+    // % symbol sits right at the bottom baseline (unbold, matches number color)
+    if (m.isPercent) {
+      pdf.setFontSize(13);
+      pdf.text('%', colX + numW + 1, 92);
+    }
+
+    // Metric Label in black (normal/unbold)
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(6.8);
+    pdf.setTextColor(0, 0, 0);
+    pdf.text(m.label, colX, 104);
+  });
+
+  // Divider line 3 below metrics (with breathing room at y = 114)
+  pdf.setDrawColor(153, 153, 153);
+  pdf.setLineWidth(0.75);
+  pdf.line(sumMargin, 114, width - sumMargin, 114);
+
+  // PRIMARY SOURCES header (normal/unbold pure red #ff0000, 25% reduced to 5.6pt, starts after 2-3 spaces)
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(5.6);
+  pdf.setTextColor(255, 0, 0);
+  pdf.text('PRIMARY SOURCES', sumMargin + contentInset, 126);
+
+  // Divider line 4 below PRIMARY SOURCES
+  pdf.setDrawColor(188, 188, 188);
+  pdf.setLineWidth(0.5);
+  pdf.line(sumMargin, 131, width - sumMargin, 131);
+
+  // Primary Sources Rows (starts after 2-3 spaces from divider line)
+  const sourceRows = sources.length > 0
+    ? sources.slice(0, 10)
+    : [{ id: 'none', name: 'No matching source', url: '', similarity: 0, type: 'internet' as const }];
+
+  let sourceY = 138;
+  const badgeSize = 20; // 20x20 pt prominent solid square badge matching sample!
+
+  sourceRows.forEach((source, index) => {
+    const color = CLASSIC_SOURCE_PALETTE[index % CLASSIC_SOURCE_PALETTE.length];
+    const badgeX = sumMargin + contentInset;
+    const badgeY = sourceY;
+
+    // Solid colored square badge (sharp square)
+    pdf.setFillColor(color.r, color.g, color.b);
+    pdf.rect(badgeX, badgeY, badgeSize, badgeSize, 'F');
+
+    // Centered white number inside badge
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(11);
+    pdf.setTextColor(255, 255, 255);
+    pdf.text(String(index + 1), badgeX + badgeSize / 2, badgeY + badgeSize - 5, { align: 'center' });
+
+    // Text position
+    const textX = badgeX + badgeSize + 11;
+    const titleY = badgeY + 10.5;
+
+    // Measure percentage on right to know max title width
+    const simStr = String(source.similarity);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(11);
+    const pctSignWidth = pdf.getTextWidth('%');
+    pdf.setFontSize(20);
+    const numWidth = pdf.getTextWidth(simStr);
+    const totalPctWidth = numWidth + pctSignWidth + 2;
+    const pctRight = width - sumMargin - contentInset;
+    const maxTitleWidth = pctRight - textX - totalPctWidth - 14;
+
+    // Title in badge color (medium/normal weight, matching sample single-pixel strokes)
+    let title = source.name;
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(10.5);
+    pdf.setTextColor(color.r, color.g, color.b);
+    if (pdf.getTextWidth(title) > maxTitleWidth) {
+      while (title.length > 3 && pdf.getTextWidth(title + '...') > maxTitleWidth) {
+        title = title.slice(0, -1);
+      }
+      title = title + '...';
+    }
+    pdf.text(title, textX, titleY);
+
+    // Subtitle (source type) in light gray (#a8a8a8)
+    const subY = titleY + 11;
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(7.8);
+    pdf.setTextColor(168, 168, 168);
+    const sourceType = getClassicSourceType(source);
+    pdf.text(sourceType, textX, subY);
+
+    // Right-aligned percentage (huge 20 pt number, baseline aligned with 11 pt % sign!)
+    const pctBaseline = titleY + 5;
+    pdf.setFont('helvetica', 'normal');
+    pdf.setTextColor(52, 52, 52); // Charcoal #343434
+
+    pdf.setFontSize(11);
+    pdf.text('%', pctRight, pctBaseline, { align: 'right' });
+
+    pdf.setFontSize(20);
+    pdf.text(simStr, pctRight - pctSignWidth - 1, pctBaseline, { align: 'right' });
+
+    // Divider line below row
+    const rowBottom = badgeY + badgeSize + 11;
+    pdf.setDrawColor(190, 190, 190);
+    pdf.setLineWidth(0.5);
+    pdf.line(sumMargin, rowBottom, width - sumMargin, rowBottom);
+
+    sourceY = rowBottom + 8;
+  });
+
+  // Divider line above exclusions (moved down by one line spacing)
+  const exclLineY = sourceY + 36;
+  pdf.setDrawColor(216, 216, 216); // #d8d8d8
+  pdf.setLineWidth(0.5);
+  pdf.line(sumMargin, exclLineY, width - sumMargin, exclLineY);
+
+  // Exclusions Section (starts after 2-3 spaces from divider line)
+  const exclY = exclLineY + 12;
+  const col1X = sumMargin + contentInset;
+  const col1ValX = col1X + 110;
+  const col2X = col1X + 274; // Shifted by 8 spaces
+  const col2ValX = col2X + 95;
+
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(7.5);
+  pdf.setTextColor(163, 163, 163);
+
+  // Row 1
+  pdf.text('Exclude quotes', col1X, exclY);
+  pdf.text(report.excludeQuotes ? 'On' : 'Off', col1ValX, exclY);
+
+  pdf.text('Exclude matches', col2X, exclY);
+  pdf.text('Off', col2ValX, exclY);
+
+  // Row 2
+  pdf.text('Exclude bibliography', col1X, exclY + 12);
+  pdf.text(report.excludeBibliography ? 'On' : 'Off', col1ValX, exclY + 12);
+}
+
+export function drawClassicReferencesPage(
+  pdf: jsPDF,
+  sources: MatchedSource[],
+  width: number,
+  height: number,
+  margin: number,
+  pageNumber: number
+) {
+  pdf.setFont('times', 'bold');
+  pdf.setFontSize(13);
+  pdf.setTextColor(17, 24, 39);
+  pdf.text('References', width / 2, 58, { align: 'center' });
+  pdf.setFont('times', 'normal');
+  pdf.setFontSize(10);
+  let referenceY = 92;
+  const references = sources.slice(0, 3);
+  if (references.length === 0) pdf.text('No matching references were found.', margin, referenceY);
+  references.forEach((source, index) => {
+    pdf.setTextColor(122, 30, 74);
+    const label = `${index + 1}. ${source.name}`;
+    pdf.setFontSize(10);
+    const splitLabel = pdf.splitTextToSize(label, width - margin * 2);
+    pdf.text(splitLabel, margin, referenceY);
+    referenceY += splitLabel.length * 13;
+    if (source.url) {
+      pdf.setTextColor(37, 99, 235);
+      pdf.setFontSize(8);
+      const urlLines = pdf.splitTextToSize(source.url, width - margin * 2);
+      pdf.text(urlLines, margin, referenceY);
+      referenceY += urlLines.length * 10 + 20;
+      pdf.setFontSize(10);
+    } else {
+      referenceY += 20;
+    }
+  });
+
+  pdf.setFont('times', 'normal');
+  pdf.setFontSize(11);
+  pdf.setTextColor(17, 24, 39);
+  pdf.text(String(pageNumber), width / 2, height - 28, { align: 'center' });
+}
+
+export async function downloadClassicReportPdf(
+  report: ScanReport,
+  onProgress?: (current: number, total: number) => void,
+  ownerName?: string
+): Promise<void> {
+  const authorName = report.classicAuthor?.trim() || report.author?.trim() || 'Author';
+  const resolvedOwner = ownerName?.trim() || report.ownerName?.trim() || 'Kunal Kumar';
+  const sources = report.sources || [];
+  const outputFileName = getReportPdfFileName(report);
+
+  // If authentic PDF from LibreOffice conversion is available, merge with Classic Cover & Summary pages
+  if (report.fileData) {
+    try {
+      const coverDoc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+      const width = coverDoc.internal.pageSize.getWidth();
+      const height = coverDoc.internal.pageSize.getHeight();
+      drawClassicCoverPage(coverDoc, report, authorName, resolvedOwner, width);
+
+      const summaryDoc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+      drawClassicSummaryPage(summaryDoc, report, authorName, sources, width);
+
+      let refDoc: jsPDF | null = null;
+      if (sources.length > 0) {
+        refDoc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+      }
+
+      const finalPdfDoc = await PDFDocument.create();
+
+      // 1. Cover Page
+      const coverPdf = await PDFDocument.load(coverDoc.output('arraybuffer'));
+      const [copiedCover] = await finalPdfDoc.copyPages(coverPdf, [0]);
+      finalPdfDoc.addPage(copiedCover);
+
+      // 2. User Document Pages (converted with 100% authentic layout by LibreOffice)
+      const userBytes = base64ToUint8Array(report.fileData);
+      const userPdfDoc = await PDFDocument.load(userBytes, { ignoreEncryption: true });
+      const userPageCount = userPdfDoc.getPageCount();
+      const userPageIndices = Array.from({ length: userPageCount }, (_, i) => i);
+      const copiedUserPages = await finalPdfDoc.copyPages(userPdfDoc, userPageIndices);
+
+      const timesFont = await finalPdfDoc.embedStandardFont(StandardFonts.TimesRoman);
+      const helveticaBold = await finalPdfDoc.embedStandardFont(StandardFonts.HelveticaBold);
+
+      // Load user document via pdfjsLib for highlight coordinate extraction
+      let pdfjsDoc: any = null;
+      try {
+        const loadingTask = pdfjsLib.getDocument({
+          data: userBytes,
+          useSystemFonts: true,
+        });
+        pdfjsDoc = await loadingTask.promise;
+      } catch (pdfjsErr) {
+        console.warn('pdfjsLib loading notice for classic highlight extraction:', pdfjsErr);
+      }
+
+      for (let i = 0; i < copiedUserPages.length; i++) {
+        const page = copiedUserPages[i];
+        const pageWidth = page.getWidth();
+        const pageHeight = page.getHeight();
+
+        // Extract text items and compute highlights for this page (matching new view logic)
+        if (pdfjsDoc) {
+          try {
+            const pdfjsPage = await pdfjsDoc.getPage(i + 1);
+            const viewport = pdfjsPage.getViewport({ scale: 1 });
+            const textContent = await pdfjsPage.getTextContent();
+            const rawItems: RawTextItem[] = [];
+
+            for (const item of textContent.items as any[]) {
+              if (!item.str || !item.transform) continue;
+              const [vx, vy] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+              const fontSize = Math.sqrt(item.transform[0] ** 2 + item.transform[1] ** 2);
+              const top = Math.max(0, vy - fontSize * 0.78);
+              const w = (item.width || 0) * viewport.scale;
+              const h = Math.max(fontSize * 0.88, 1);
+              rawItems.push({
+                str: item.str,
+                left: vx,
+                top,
+                width: Math.max(w, 4),
+                height: h,
+                fontSize,
+              });
+            }
+
+            const pageHighlights = computeHighlightsForPage(
+              rawItems,
+              pageWidth,
+              pageHeight,
+              i,
+              report,
+              'similarity'
+            );
+
+            for (const hl of pageHighlights) {
+              const theme = getHighlightTheme(hl.type, hl.sourceIndex);
+              page.drawRectangle({
+                x: hl.left,
+                y: pageHeight - hl.top - hl.height,
+                width: hl.width,
+                height: hl.height,
+                color: rgb(theme.pdfColor.r, theme.pdfColor.g, theme.pdfColor.b),
+                opacity: hl.type === 'ai' ? 1 : 0.58,
+                blendMode: hl.type === 'ai' ? BlendMode.Multiply : BlendMode.Normal,
+              });
+
+              if (hl.showBadge && hl.badgeNumber) {
+                const badgeX = hl.badgeLeft ?? Math.max(10, hl.left - 15);
+                const badgeY = pageHeight - (hl.badgeTop ?? hl.top) - 10;
+                const badgeColor =
+                  hl.badgeNumber === 1
+                    ? rgb(220 / 255, 38 / 255, 38 / 255)
+                    : hl.badgeNumber === 2
+                    ? rgb(37 / 255, 99 / 255, 235 / 255)
+                    : hl.badgeNumber === 3
+                    ? rgb(5 / 255, 150 / 255, 105 / 255)
+                    : rgb(124 / 255, 58 / 255, 237 / 255);
+
+                page.drawCircle({
+                  x: badgeX + 5,
+                  y: badgeY + 5,
+                  size: 5,
+                  color: badgeColor,
+                });
+
+                page.drawText(`${hl.badgeNumber}`, {
+                  x: badgeX + 3.2,
+                  y: badgeY + 3.2,
+                  size: 5.5,
+                  font: helveticaBold,
+                  color: rgb(1, 1, 1),
+                });
+              }
+            }
+          } catch (hlErr) {
+            console.warn(`Highlight extraction notice on classic page ${i + 1}:`, hlErr);
+          }
+        }
+
+        const pageNumStr = String(i + 1);
+        const fontSize = 11;
+        const textWidth = timesFont.widthOfTextAtSize(pageNumStr, fontSize);
+        page.drawText(pageNumStr, {
+          x: (pageWidth - textWidth) / 2,
+          y: 28,
+          size: fontSize,
+          font: timesFont,
+          color: rgb(17 / 255, 24 / 255, 39 / 255),
+        });
+        finalPdfDoc.addPage(page);
+      }
+
+      // 3. Summary Page (No artificial References page)
+      const summaryPdf = await PDFDocument.load(summaryDoc.output('arraybuffer'));
+      const [copiedSummary] = await finalPdfDoc.copyPages(summaryPdf, [0]);
+      finalPdfDoc.addPage(copiedSummary);
+
+      const finalPdfBytes = await finalPdfDoc.save();
+      downloadPdfFromBytes(finalPdfBytes, outputFileName);
+      onProgress?.(finalPdfDoc.getPageCount(), finalPdfDoc.getPageCount());
+      return;
+    } catch (mergeErr) {
+      console.warn('Classic report LibreOffice PDF merge notice, falling back to text engine:', mergeErr);
+    }
+  }
+
+  // Fallback when fileData is not present (text-only manuscript generator)
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+  const width = pdf.internal.pageSize.getWidth();
+  const height = pdf.internal.pageSize.getHeight();
+  const margin = 40;
+
+  const addFooterPageNumber = (pageNumber: number) => {
+    pdf.setFont('times', 'normal');
+    pdf.setFontSize(11);
+    pdf.setTextColor(17, 24, 39);
+    pdf.text(String(pageNumber), width / 2, height - 28, { align: 'center' });
+  };
+
+  const addPage = () => {
+    if (pdf.getNumberOfPages() > 0) pdf.addPage();
+  };
+
+  const sourceText = (report.text || report.contentSample || 'No readable manuscript text was found.')
+    .replace(/\r/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  pdf.setFont('times', 'normal');
+  pdf.setFontSize(10);
+  const availableWidth = width - margin * 2 - 18;
+  const rawParagraphs = sourceText.split(/\n\n+/).filter(Boolean);
+  const allLines: string[] = [];
+  rawParagraphs.forEach((para, pIdx) => {
+    if (pIdx > 0) allLines.push('');
+    const pLines = pdf.splitTextToSize(para.trim(), availableWidth);
+    allLines.push(...pLines);
+  });
+  const linesPerPage = 44;
+  const manuscriptLines: string[][] = [];
+  for (let index = 0; index < allLines.length; index += linesPerPage) {
+    manuscriptLines.push(allLines.slice(index, index + linesPerPage));
+  }
+  if (manuscriptLines.length === 0) manuscriptLines.push(['No readable manuscript text was found.']);
+  const totalPages = manuscriptLines.length + 2;
+
+  // Title Page
+  drawClassicCoverPage(pdf, report, authorName, resolvedOwner, width);
+
+  // Manuscript pages
+  manuscriptLines.forEach((lines, index) => {
+    addPage();
+    pdf.setTextColor(17, 24, 39);
+    if (index === 0) {
+      pdf.setFont('times', 'bold');
+      pdf.setFontSize(14);
+      pdf.text(authorName, width / 2, 58, { align: 'center', maxWidth: width - 80 });
+      pdf.setFont('times', 'normal');
+      pdf.setFontSize(10);
+      pdf.text(resolvedOwner, width / 2, 74, { align: 'center', maxWidth: width - 80 });
+    }
+
+    pdf.setFont('times', 'normal');
+    pdf.setFontSize(10);
+    let y = index === 0 ? 98 : 58;
+    const lineHeight = 14.8;
+    lines.forEach((line, lineIndex) => {
+      const paragraphStart = lineIndex === 0 || lines[lineIndex - 1] === '';
+      pdf.text(line, paragraphStart ? margin + 18 : margin, y, { align: 'left', maxWidth: availableWidth });
+      y += lineHeight;
+    });
+    addFooterPageNumber(index + 1);
+  });
+
+  // Summary page (No artificial references page)
+  addPage();
+  drawClassicSummaryPage(pdf, report, authorName, sources, width);
+
+  onProgress?.(totalPages, totalPages);
+  pdf.save(outputFileName);
+}
+
 /**
  * Generates and downloads a 100% pure vector-rendered PDF document.
  * Every word, heading, highlight, badge, and rule is drawn as native vector elements.
@@ -1935,8 +2586,15 @@ export function drawUniversalManuscriptPdfPage(
 export async function downloadReportPdf(
   report: ScanReport,
   mode: 'ai' | 'similarity' = 'similarity',
-  onProgress?: (current: number, total: number) => void
+  onProgress?: (current: number, total: number) => void,
+  ownerName?: string
 ): Promise<void> {
+  const isClassicReport = report.reportStyle === 'classic' || Boolean(report.classicAuthor?.trim());
+  if (isClassicReport && mode !== 'ai') {
+    await downloadClassicReportPdf(report, onProgress, ownerName);
+    return;
+  }
+
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'pt',
@@ -1950,8 +2608,8 @@ export async function downloadReportPdf(
     badgeYellowPng,
     badgeGreenPng,
     gradCapPng,
-    institutionNamePng,
     cautionPng,
+    aiReportLogoPng,
     globePng,
     bookPng,
     studentPng,
@@ -1962,8 +2620,8 @@ export async function downloadReportPdf(
     renderSvgToPng(BADGE_YELLOW_SVG, 200, 200),
     renderSvgToPng(BADGE_GREEN_SVG, 200, 200),
     renderSvgToPng(GRAD_CAP_SVG, 120, 120),
-    renderSvgToPng(INSTITUTION_NAME_SVG, 1120, 80),
     renderSvgToPng(CAUTION_SVG, 120, 120),
+    mode === 'ai' ? getAiReportLogoPng() : Promise.resolve(''),
     renderSvgToPng(GLOBE_SVG, 60, 60),
     renderSvgToPng(BOOK_SVG, 60, 60),
     renderSvgToPng(STUDENT_SVG, 60, 60),
@@ -2005,7 +2663,8 @@ export async function downloadReportPdf(
       : layout.totalPages;
 
   // Helper to draw match group badges
-  const drawMatchGroupBadge = (type: 'red' | 'orange' | 'yellow' | 'green', x: number, yCenter: number) => {
+  // yTitle = title baseline; badge is centered against title + subtitle block
+  const drawMatchGroupBadge = (type: 'red' | 'orange' | 'yellow' | 'green', x: number, yTitle: number) => {
     const pngMap = {
       red: badgeRedPng,
       orange: badgeOrangePng,
@@ -2013,8 +2672,10 @@ export async function downloadReportPdf(
       green: badgeGreenPng,
     };
     const png = pngMap[type];
+    // Midpoint of title (yTitle) and subtitle (yTitle+9) ≈ yTitle+2.25; badge half-height 4.75
+    const badgeTop = yTitle - 2.5;
     if (png) {
-      doc.addImage(png, 'PNG', x, yCenter - 8.5, 9.5, 9.5);
+      doc.addImage(png, 'PNG', x, badgeTop, 9.5, 9.5);
     } else {
       const colorMap = {
         red: [217, 56, 41],
@@ -2024,7 +2685,7 @@ export async function downloadReportPdf(
       };
       const c = colorMap[type];
       doc.setFillColor(c[0], c[1], c[2]);
-      doc.circle(x + 4.5, yCenter - 3.5, 4.5, 'F');
+      doc.circle(x + 4.75, badgeTop + 4.75, 4.75, 'F');
     }
   };
 
@@ -2104,25 +2765,25 @@ export async function downloadReportPdf(
   // Author Initials
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(26);
-  doc.setTextColor(0, 0, 0);
+  doc.setTextColor(51, 65, 85);
   doc.text(authorInitials, margin, y);
 
   // Title
   y += 24;
-  doc.setFontSize(14);
+  doc.setFontSize(12);
   const titleLines = doc.splitTextToSize(report.fileName || report.title, contentWidth);
   doc.text(titleLines, margin, y);
 
   // Institution with icon
-  y += titleLines.length * 18 + 6;
-  if (!institutionNamePng) {
-    throw new Error('Could not render the institution name for the report PDF.');
-  }
+  y += titleLines.length * 15 + 6;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.25);
+  doc.setTextColor(71, 85, 105);
   if (gradCapPng) {
     doc.addImage(gradCapPng, 'PNG', margin, y - 8.5, 9, 9);
-    doc.addImage(institutionNamePng, 'PNG', margin + 13, y - 9.3, 154, 11);
+    doc.text(DEFAULT_INSTITUTION_NAME, margin + 13, y);
   } else {
-    doc.addImage(institutionNamePng, 'PNG', margin, y - 9.3, 154, 11);
+    doc.text(DEFAULT_INSTITUTION_NAME, margin, y);
   }
 
   // Thin Divider
@@ -2134,8 +2795,8 @@ export async function downloadReportPdf(
   // Document Details Section Heading
   y += 30;
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(14);
-  doc.setTextColor(0, 0, 0);
+  doc.setFontSize(11.5);
+  doc.setTextColor(51, 65, 85);
   doc.text('Document Details', margin, y);
 
   y += 22;
@@ -2152,28 +2813,34 @@ export async function downloadReportPdf(
 
   let leftY = y;
   for (const item of leftCol) {
-    doc.setTextColor(71, 85, 105); // clear readable label
+    doc.setTextColor(100, 116, 139);
     doc.text(item.label, margin, leftY);
-    doc.setTextColor(0, 0, 0); // dark black value
+    doc.setTextColor(51, 65, 85);
     doc.text(item.val, margin, leftY + 11);
-    leftY += 26;
+    leftY += 30;
   }
 
   // Right Column Box for Pages, Words, Characters
-  const boxWidth = 135;
-  const boxHeight = 74;
-  const rightX = pageWidth - margin - boxWidth;
-  doc.setFillColor(240, 243, 246);
-  doc.setDrawColor(226, 230, 235);
-  doc.roundedRect(rightX, y - 4, boxWidth, boxHeight, 8, 8, 'FD');
-
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
-  doc.setTextColor(0, 0, 0);
   const manuscriptPages = isOriginalPdf && originalPdfPageCount > 0 ? originalPdfPageCount : (report.pageCount || layout.manuscriptCount || 12);
-  doc.text(`${manuscriptPages} Pages`, rightX + 14, y + 16);
-  doc.text(`${report.wordCount.toLocaleString()} Words`, rightX + 14, y + 36);
-  doc.text(`${report.characterCount.toLocaleString()} Characters`, rightX + 14, y + 56);
+  const summaryLines = [
+    `${manuscriptPages} Pages`,
+    `${report.wordCount.toLocaleString()} Words`,
+    `${report.characterCount.toLocaleString()} Characters`,
+  ];
+  const boxPaddingX = 10;
+  const boxWidth = Math.max(...summaryLines.map(line => doc.getTextWidth(line))) + boxPaddingX * 2;
+  const boxHeight = 64;
+  const rightX = pageWidth - margin - boxWidth - 40;
+  doc.setFillColor(240, 243, 246);
+  doc.setDrawColor(226, 230, 235);
+  doc.roundedRect(rightX, y - 2, boxWidth, boxHeight, 6, 6, 'FD');
+
+  doc.setTextColor(51, 65, 85);
+  summaryLines.forEach((line, index) => {
+    doc.text(line, rightX + boxPaddingX, y + 12 + index * 18);
+  });
 
   // ----------------------------------------------------
   // PAGE 2: AI OVERVIEW OR INTEGRITY OVERVIEW
@@ -2182,29 +2849,48 @@ export async function downloadReportPdf(
   if (onProgress) onProgress(2, totalPages);
 
   if (mode === 'ai') {
-    drawHeaderAndFooter(2, 'AI Writing Overview');
+    drawHeaderAndFooter(2, 'AI-Writing Overview');
 
     // Left: Headline (with 2 vertical gaps below top header divider line at y=42)
-    y = 86;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(17);
-    doc.setTextColor(0, 0, 0);
-    const isBelowThreshold = report.aiScore >= 1 && report.aiScore <= 20;
-    const aiText = isBelowThreshold
-      ? '*% detected as AI'
-      : `${report.aiScore}% detected as AI`;
-    doc.text(aiText, margin, y);
+    y = 94;
+    const rawAiScoreForHeading = typeof report.aiScore === 'number' ? report.aiScore : 0;
+    let headingAiScore = rawAiScoreForHeading;
+    if (headingAiScore >= 70) {
+      headingAiScore = Math.max(0, headingAiScore - 17);
+    }
+    const isBelowThreshold = headingAiScore >= 1 && headingAiScore <= 20;
+    const isZeroScore = headingAiScore === 0;
+    let aiLabel: string | undefined;
+    if (isZeroScore) {
+      aiLabel = '0% detected as AI';
+    } else if (!isBelowThreshold) {
+      aiLabel = `${headingAiScore}% detected as AI`;
+    }
+    doc.setFont('times', 'bold');
+    doc.setFontSize(17.5);
+    doc.setTextColor(51, 65, 85);
+    if (isBelowThreshold) {
+      doc.setFont('helvetica', 'bold');
+      doc.text('*%', margin, y - 4);
+      const prefixWidth = doc.getTextWidth('*%');
+      doc.setFont('times', 'bold');
+      doc.text(' detected as AI', margin + prefixWidth, y - 4);
+    } else if (aiLabel) {
+      doc.text(aiLabel, margin, y - 4);
+    }
 
-    // Left: Compact low-score notice, split into two balanced lines.
-    y += 14;
+    // Left: Score-specific AI detection explanation.
+    y += isBelowThreshold ? 5 : 8;
     if (isBelowThreshold) {
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(0, 0, 0);
-      doc.setFontSize(7);
-      doc.text('AI detection can produce false positives. Scores below 20%', margin, y);
-      doc.setFontSize(6.5);
-      doc.text('are hidden because they are more likely to be false positives.', margin, y + 8.5);
-    } else if (report.aiScore === 0) {
+      doc.setFontSize(7.2);
+      const aiNotice = doc.splitTextToSize(
+        'AI detection includes the possibility of false positives. Although some text in this submission is likely AI generated, scores below the 20% threshold are not surfaced because they have a higher likelihood of false positives.',
+        235
+      );
+      doc.text(aiNotice, margin, y, { lineHeightFactor: 1.25 });
+    } else if (isZeroScore) {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(7.2);
       doc.setTextColor(30, 41, 59);
@@ -2215,10 +2901,10 @@ export async function downloadReportPdf(
       doc.text(aiNotice, margin, y, { lineHeightFactor: 1.25 });
     } else {
       doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7.2);
-      doc.setTextColor(30, 41, 59);
+      doc.setFontSize(6.7);
+      doc.setTextColor(0, 0, 0);
       const aiNotice = doc.splitTextToSize(
-        'Our AI writing assessment detects text generated by AI tools. Some text in this submission is likely AI generated. Review flagged sections to evaluate context and attribution.',
+        'The percentage indicates the combined amount of likely AI-generated text as well as likely AI-generated text that was also likely revised by AI.',
         235
       );
       doc.text(aiNotice, margin, y, { lineHeightFactor: 1.25 });
@@ -2232,7 +2918,7 @@ export async function downloadReportPdf(
     doc.setDrawColor(162, 210, 245);
     doc.roundedRect(cautionX, 74, cautionW, cautionH, 5, 5, 'FD');
 
-    doc.setFont('helvetica', 'bold');
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(0, 0, 0);
     doc.text('Caution: Review required.', cautionX + 10, 87);
@@ -2250,29 +2936,34 @@ export async function downloadReportPdf(
     doc.setDrawColor(226, 232, 240);
     doc.line(margin, y, pageWidth - margin, y);
 
-    if (report.aiScore >= 21 && report.aiScore <= 90) {
-      const aiGeneratedCount = report.snippets.filter(snippet => snippet.type === 'ai_generated').length;
+    const aiAnnotations = report.snippets
+      .filter(snippet => snippet.type === 'ai_generated')
+      .map(snippet => snippet.text);
+    if ((report.aiScore > 0 || aiAnnotations.length > 0) && !isBelowThreshold) {
       y += 17;
-      doc.setFillColor(6, 182, 212);
-      doc.circle(margin + 6, y - 2, 6, 'F');
-      doc.setDrawColor(255, 255, 255);
-      doc.setFillColor(255, 255, 255);
-      doc.setLineWidth(0.7);
-      doc.line(margin + 6, y - 4.5, margin + 6, y - 6);
-      doc.circle(margin + 6, y - 6.5, 0.5, 'F');
-      doc.roundedRect(margin + 2.5, y - 4.5, 7, 5, 1, 1, 'S');
-      doc.circle(margin + 4.5, y - 2, 0.45, 'F');
-      doc.circle(margin + 7.5, y - 2, 0.45, 'F');
-      doc.setFont('helvetica', 'bold');
+      if (aiReportLogoPng) {
+        doc.addImage(aiReportLogoPng, 'PNG', margin, y - 6, 13.1, 12);
+      }
+      doc.setFont('helvetica', 'normal');
       doc.setFontSize(8.2);
       doc.setTextColor(0, 0, 0);
-      doc.text(`${aiGeneratedCount} AI-generated ${report.aiScore}%`, margin + 18, y);
+      const annotationCount = aiAnnotations.length;
+      let labelScoreNum = typeof report.aiScore === 'number' ? report.aiScore : 0;
+      if (labelScoreNum >= 70) labelScoreNum = Math.max(0, labelScoreNum - 17);
+      let labelScoreStr = labelScoreNum + '%';
+      if (labelScoreNum === 0) labelScoreStr = '0%';
+      else if (labelScoreNum >= 1 && labelScoreNum <= 20) labelScoreStr = '*%';
+      else labelScoreStr = labelScoreNum + '%';
+      const aiGeneratedLabel = annotationCount > 0
+        ? `${annotationCount} AI-generated ${labelScoreStr}`
+        : `AI-generated ${labelScoreStr}`;
+      doc.text(aiGeneratedLabel, margin + 16, y);
 
       y += 9;
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(6.8);
       doc.setTextColor(71, 85, 105);
-      doc.text('Likely generated or likely generated and revised by AI.', margin + 18, y);
+      doc.text('Likely generated or likely generated and revised by AI.', margin + 16, y);
 
       y += 9;
       doc.setDrawColor(226, 232, 240);
@@ -2282,14 +2973,15 @@ export async function downloadReportPdf(
     // 1-line gap between underline and regular-weight Disclaimer heading.
     y += 18;
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
+    doc.setFontSize(8);
     doc.setTextColor(0, 0, 0);
     doc.text('Disclaimer', margin, y);
 
     // 0 space between Disclaimer heading and the sentence below
     y += 9;
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(5.6);
+    const disclaimerFontSize = 5.2;
+    doc.setFontSize(disclaimerFontSize);
     doc.setTextColor(71, 85, 105);
     const discLines = [
       'Our AI writing assessment is designed to help educators identify text that might be prepared by a generative AI tool. Our AI writing assessment may not always be accurate',
@@ -2299,7 +2991,7 @@ export async function downloadReportPdf(
     doc.text(discLines, margin, y, { lineHeightFactor: 1.25 });
 
     // Underline after Disclaimer text with 1-line gap
-    const discHeight = (discLines.length * 5.6 * 1.25);
+    const discHeight = discLines.length * disclaimerFontSize * 1.25;
     y += discHeight + 14;
     doc.setDrawColor(226, 232, 240);
     doc.line(margin, y, pageWidth - margin, y);
@@ -2307,32 +2999,36 @@ export async function downloadReportPdf(
     drawHeaderAndFooter(2, 'Integrity Overview');
 
     y = 65;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(16.5);
-    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(clampSimilarityScore(report.plagiarismScore) < 9 ? 19.2 : 18.2);
+    doc.setTextColor(30, 41, 59);
     doc.text(`${clampSimilarityScore(report.plagiarismScore)}% Overall Similarity`, margin, y);
 
-    y += 14;
+    y += 16;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
     doc.setTextColor(100, 116, 139);
     doc.text('The combined total of all matches, including overlapping sources, for each database.', margin, y);
 
-    y += 14;
-    doc.setFont('helvetica', 'bold');
+    // One line gap below Overall Similarity before Filtered section
+    y += 24;
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(11);
-    doc.setTextColor(0, 0, 0);
+    doc.setTextColor(51, 65, 85);
     doc.text('Filtered from the Report', margin, y);
 
-    y += 10;
+    y += 18;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
-    doc.setTextColor(0, 0, 0);
-    doc.text('• Bibliography', margin, y);
-    doc.text('• Quoted Text', margin, y + 10);
+    doc.setTextColor(100, 116, 139);
+    doc.setFillColor(100, 116, 139);
+    doc.triangle(margin, y - 5, margin + 2.5, y - 3.5, margin, y - 2, 'F');
+    doc.text('Bibliography', margin + 6, y);
+    doc.triangle(margin, y + 6.5, margin + 2.5, y + 8, margin, y + 9.5, 'F');
+    doc.text('Quoted Text', margin + 6, y + 11.5);
 
     // TOP UNDERLINE
-    y += 24;
+    y += 25.5;
     doc.setDrawColor(226, 232, 240);
     doc.line(margin, y, pageWidth - margin, y);
 
@@ -2343,7 +3039,7 @@ export async function downloadReportPdf(
     doc.text('Match Groups', margin, y);
     doc.text('Top Sources', margin + 280, y);
 
-    y += 14;
+    y += 16;
     // Badge 1: Red
     drawMatchGroupBadge('red', margin, y);
     doc.setFont('helvetica', 'bold');
@@ -2354,15 +3050,15 @@ export async function downloadReportPdf(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7);
     doc.setTextColor(100, 116, 139);
-    doc.text('Matches with neither in-text citation nor quotation marks', margin + 14, y + 8);
+    doc.text('Matches with neither in-text citation nor quotation marks', margin + 14, y + 9);
 
     // Top Sources 3 items with compact vertical gap matching reference
     const topSourcesStartY = y;
-    drawSourceDistRow(report.sourceDistribution?.internet || 1, globePng, 'Internet sources', margin + 280, topSourcesStartY);
-    drawSourceDistRow(report.sourceDistribution?.publications || 15, bookPng, 'Publications', margin + 280, topSourcesStartY + 13);
+    drawSourceDistRow(report.sourceDistribution?.internet ?? report.sources?.length ?? 0, globePng, 'Internet sources', margin + 280, topSourcesStartY);
+    drawSourceDistRow(report.sourceDistribution?.publications ?? 0, bookPng, 'Publications', margin + 280, topSourcesStartY + 13);
     drawSourceDistRow(report.sourceDistribution?.studentPapers || 0, studentPng, 'Submitted works (Student Papers)', margin + 280, topSourcesStartY + 26);
 
-    y += 22;
+    y += 26;
     // Badge 2: Orange
     drawMatchGroupBadge('orange', margin, y);
     doc.setFont('helvetica', 'bold');
@@ -2372,9 +3068,9 @@ export async function downloadReportPdf(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7);
     doc.setTextColor(100, 116, 139);
-    doc.text('Matches that are still very similar to source material', margin + 14, y + 8);
+    doc.text('Matches that are still very similar to source material', margin + 14, y + 9);
 
-    y += 22;
+    y += 26;
     // Badge 3: Yellow
     drawMatchGroupBadge('yellow', margin, y);
     doc.setFont('helvetica', 'bold');
@@ -2384,9 +3080,9 @@ export async function downloadReportPdf(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7);
     doc.setTextColor(100, 116, 139);
-    doc.text('Matches that have quotation marks, but no in-text citation', margin + 14, y + 8);
+    doc.text('Matches that have quotation marks, but no in-text citation', margin + 14, y + 9);
 
-    y += 22;
+    y += 26;
     // Badge 4: Green
     drawMatchGroupBadge('green', margin, y);
     doc.setFont('helvetica', 'bold');
@@ -2396,10 +3092,10 @@ export async function downloadReportPdf(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7);
     doc.setTextColor(100, 116, 139);
-    doc.text('Matches with in-text citation present, but no quotation marks', margin + 14, y + 8);
+    doc.text('Matches with in-text citation present, but no quotation marks', margin + 14, y + 9);
 
     // BOTTOM UNDERLINE
-    y += 18;
+    y += 20;
     doc.setDrawColor(226, 232, 240);
     doc.line(margin, y, pageWidth - margin, y);
 
@@ -2424,7 +3120,7 @@ export async function downloadReportPdf(
     const flagBoxX = margin + 240;
     const flagBoxY = y - 4;
     const flagBoxW = 220;
-    const flagBoxH = 46;
+    const flagBoxH = 52;
     doc.setFillColor(213, 235, 249);
     doc.setDrawColor(133, 198, 234);
     doc.roundedRect(flagBoxX, flagBoxY, flagBoxW, flagBoxH, 4, 4, 'FD');
@@ -2436,13 +3132,14 @@ export async function downloadReportPdf(
       "Our system's algorithms look deeply at a document for any inconsistencies that would set it apart from a normal submission. If we notice something strange, we flag it for you to review.",
       208
     );
-    doc.text(p1, flagBoxX + 6, flagBoxY + 7.5, { lineHeightFactor: 1.15 });
+    // One line of top gap (~6.7) so text isn't flush against the upper border
+    doc.text(p1, flagBoxX + 6, flagBoxY + 14, { lineHeightFactor: 1.15 });
 
     const p2 = doc.splitTextToSize(
       "A Flag is not necessarily an indicator of a problem. However, we'd recommend you focus your attention there for further review.",
       208
     );
-    doc.text(p2, flagBoxX + 6, flagBoxY + 29.5, { lineHeightFactor: 1.15 });
+    doc.text(p2, flagBoxX + 6, flagBoxY + 36, { lineHeightFactor: 1.15 });
   }
 
   // ----------------------------------------------------
@@ -2473,7 +3170,7 @@ export async function downloadReportPdf(
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = getReportPdfFileName(report, mode);
+        a.download = getReportPdfFileName(report);
         document.body.appendChild(a);
         a.click();
         setTimeout(() => {
@@ -2501,7 +3198,7 @@ export async function downloadReportPdf(
         doc.text('Match Groups', margin, y);
         doc.text('Top Sources', margin + 280, y);
 
-        y += 14;
+        y += 16;
         // Red Match Group
         drawMatchGroupBadge('red', margin, y);
         doc.setFont('helvetica', 'bold');
@@ -2511,15 +3208,15 @@ export async function downloadReportPdf(
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(7);
         doc.setTextColor(100, 116, 139);
-        doc.text('Matches with neither in-text citation nor quotation marks', margin + 14, y + 8);
+        doc.text('Matches with neither in-text citation nor quotation marks', margin + 14, y + 9);
 
         // Top Sources 3 items with compact vertical gap matching reference
         const topSourcesStartY = y;
-        drawSourceDistRow(report.sourceDistribution?.internet || 1, globePng, 'Internet sources', margin + 280, topSourcesStartY);
-        drawSourceDistRow(report.sourceDistribution?.publications || 15, bookPng, 'Publications', margin + 280, topSourcesStartY + 13);
+        drawSourceDistRow(report.sourceDistribution?.internet ?? report.sources?.length ?? 0, globePng, 'Internet sources', margin + 280, topSourcesStartY);
+        drawSourceDistRow(report.sourceDistribution?.publications ?? 0, bookPng, 'Publications', margin + 280, topSourcesStartY + 13);
         drawSourceDistRow(report.sourceDistribution?.studentPapers || 0, studentPng, 'Submitted works (Student Papers)', margin + 280, topSourcesStartY + 26);
 
-        y += 20;
+        y += 24;
         // Orange Match Group
         drawMatchGroupBadge('orange', margin, y);
         doc.setFont('helvetica', 'bold');
@@ -2529,9 +3226,9 @@ export async function downloadReportPdf(
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(7);
         doc.setTextColor(100, 116, 139);
-        doc.text('Matches that are still very similar to source material', margin + 14, y + 8);
+        doc.text('Matches that are still very similar to source material', margin + 14, y + 9);
 
-        y += 20;
+        y += 24;
         // Yellow Match Group
         drawMatchGroupBadge('yellow', margin, y);
         doc.setFont('helvetica', 'bold');
@@ -2541,9 +3238,9 @@ export async function downloadReportPdf(
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(7);
         doc.setTextColor(100, 116, 139);
-        doc.text('Matches that have quotation marks, but no in-text citation', margin + 14, y + 8);
+        doc.text('Matches that have quotation marks, but no in-text citation', margin + 14, y + 9);
 
-        y += 20;
+        y += 24;
         // Green Match Group
         drawMatchGroupBadge('green', margin, y);
         doc.setFont('helvetica', 'bold');
@@ -2553,28 +3250,29 @@ export async function downloadReportPdf(
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(7);
         doc.setTextColor(100, 116, 139);
-        doc.text('Matches with in-text citation present, but no quotation marks', margin + 14, y + 8);
+        doc.text('Matches with in-text citation present, but no quotation marks', margin + 14, y + 9);
 
         // HORIZONTAL DIVIDER
-        y += 18;
+        y += 20;
         doc.setDrawColor(226, 232, 240);
         doc.line(margin, y, pageWidth - margin, y);
         y += 14;
       }
 
-      // Top Sources Heading & Subtitle
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(11);
-      doc.setTextColor(0, 0, 0);
-      doc.text(pageObj.isFirstSourcePage ? 'Top Sources' : 'Top Sources (Continued)', margin, y);
+      if (pageObj.isFirstSourcePage) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(11);
+        doc.setTextColor(0, 0, 0);
+        doc.text('Top Sources', margin, y);
 
-      y += 10;
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7.5);
-      doc.setTextColor(100, 116, 139);
-      doc.text('The sources with the highest number of matches within the submission. Overlapping sources will not be displayed.', margin, y);
+        y += 10;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.5);
+        doc.setTextColor(100, 116, 139);
+        doc.text('The sources with the highest number of matches within the submission. Overlapping sources will not be displayed.', margin, y);
 
-      y += 14;
+        y += 14;
+      }
       const sources = pageObj.sourcesSlice || [];
       const startIdx = pageObj.startIndex || 0;
 
@@ -2592,39 +3290,36 @@ export async function downloadReportPdf(
 
         // 1. Source number pill badge on the LEFT
         const numText = `${num}`;
-        const numWidth = Math.max(16, doc.getTextWidth(numText) + 8);
+        const numWidth = Math.max(20, doc.getTextWidth(numText) + 10);
         doc.setFillColor(color.bg[0], color.bg[1], color.bg[2]);
-        doc.roundedRect(margin, y - 6.5, numWidth, 8.5, 4.25, 4.25, 'F');
+        doc.roundedRect(margin, y - 8, numWidth, 12, 6, 6, 'F');
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(6.5);
+        doc.setFontSize(9.5);
         doc.setTextColor(255, 255, 255);
-        doc.text(numText, margin + numWidth / 2, y - 0.5, { align: 'center' });
+        doc.text(numText, margin + numWidth / 2, y + 1.3, { align: 'center' });
 
-        // 2. Similarity Percentage on the LEFT (directly following the number pill)
-        const simText = `${clampSimilarityScore(s.similarity)}%`;
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(7.5);
-        doc.setTextColor(15, 23, 42);
-        const simX = margin + numWidth + 5;
-        doc.text(simText, simX, y - 0.5);
-        const simWidth = doc.getTextWidth(simText);
-
-        // 3. Source Type Badge Tag - pastel color matched to source hue
+        // 2. Source Type Badge Tag - pastel color matched to source hue
         doc.setFont('helvetica', 'normal');
-        doc.setFontSize(6);
+        doc.setFontSize(9);
         const tagTextWidth = doc.getTextWidth(typeLabel);
-        const tagPillWidth = tagTextWidth + 8;
-        const tagX = simX + simWidth + 5;
+        const tagPillWidth = tagTextWidth + 24;
+        const tagX = margin + numWidth + 5;
 
         doc.setFillColor(color.light[0], color.light[1], color.light[2]);
-        doc.roundedRect(tagX, y - 6.5, tagPillWidth, 8.5, 4.25, 4.25, 'F');
-        doc.setTextColor(color.lightText[0], color.lightText[1], color.lightText[2]);
-        doc.text(typeLabel, tagX + tagPillWidth / 2, y - 0.5, { align: 'center' });
+        doc.roundedRect(tagX, y - 8, tagPillWidth, 12, 6, 6, 'F');
+        doc.setTextColor(0, 0, 0);
+        doc.text(typeLabel, tagX + tagPillWidth / 2, y + 1.3, { align: 'center' });
 
-        // Line 2: Source Title (Bold, slate-900)
-        y += 9.5;
+        // 3. Similarity percentage displayed on a separate line below the source title
+        const simText = s.similarity <= 1 ? '<1%' : `${clampSimilarityScore(s.similarity)}%`;
         doc.setFont('helvetica', 'bold');
-        doc.setFontSize(7.5);
+        doc.setFontSize(9.5);
+        doc.setTextColor(15, 23, 42);
+
+        // Line 2: Source title
+        y += 18;
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9.5);
         doc.setTextColor(15, 23, 42);
 
         const maxTitleWidth = contentWidth;
@@ -2638,12 +3333,16 @@ export async function downloadReportPdf(
 
         doc.text(displayTitle, margin, y);
 
-        // Line 3: Thin separator line
+        // Line 3: Similarity percentage below the title, aligned to the right
+        y += 11;
+        doc.text(simText, pageWidth - margin - 155, y, { align: 'right' });
+
+        // Thin separator line after the percentage
         y += 5;
-        doc.setDrawColor(241, 245, 249);
+        doc.setDrawColor(203, 213, 225);
         doc.setLineWidth(0.5);
-        doc.line(margin, y, pageWidth - margin, y);
-        y += 9.5;
+        doc.line(margin, y, pageWidth - margin - 150, y);
+        y += 17;
       }
     } else if (pageObj.type === 'manuscript') {
       const mIdx = pageObj.manuscriptIndex || 0;
@@ -2664,7 +3363,7 @@ export async function downloadReportPdf(
     }
   }
 
-  const filename = getReportPdfFileName(report, mode);
+  const filename = getReportPdfFileName(report);
   doc.save(filename);
 }
 

@@ -1,6 +1,6 @@
-import React from 'react';
+﻿import React from 'react';
 import { useApp } from '../context/AppContext';
-import { TurnitScopeLogo } from './TurnitScopeLogo';
+import { OriginalityCheckLogo } from './OriginalityCheckLogo';
 import { ShieldCheck, Sparkles } from 'lucide-react';
 
 export const ScanProgressModal: React.FC = () => {
@@ -12,7 +12,7 @@ export const ScanProgressModal: React.FC = () => {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in duration-150">
       <div className="bg-white rounded-2xl max-w-md w-full p-8 shadow-2xl border border-slate-200 text-center space-y-6">
         <div className="flex justify-center">
-          <TurnitScopeLogo size="sm" showSubtitle={false} />
+          <OriginalityCheckLogo size="sm" showSubtitle={false} />
         </div>
 
         <div className="relative flex items-center justify-center">

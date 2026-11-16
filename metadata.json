@@ -1,7 +1,6 @@
-{
+﻿{
   "name": "TurnitScope",
-  "description": "TurnitScope Client and Admin panel for AI detection, plagiarism checking, and credit management.",
+  "description": "TurnitScope - AI detection, plagiarism checking, and credit management.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
-

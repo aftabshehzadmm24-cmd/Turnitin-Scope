@@ -1,0 +1,57 @@
+# Noplag Engine - Self-hosted Plagiarism Detection
+# 
+# Start: docker compose -f docker-compose.noplag.yml up -d
+# Stop:  docker compose -f docker-compose.noplag.yml down
+# Logs:  docker compose -f docker-compose.noplag.yml logs -f
+
+version: '3.8'
+
+services:
+  # PostgreSQL database for Noplag
+  noplag-postgres:
+    image: postgres:16-alpine
+    container_name: noplag-postgres
+    environment:
+      POSTGRES_USER: noplag
+      POSTGRES_PASSWORD: noplag_dev_password
+      POSTGRES_DB: noplag
+    volumes:
+      - noplag-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"  # Avoid conflict with main app's postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U noplag"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - noplag-network
+
+  # Noplag Engine API
+  noplag-engine:
+    image: ghcr.io/noplablabs/noplag-engine:latest
+    container_name: noplag-engine
+    depends_on:
+      noplag-postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://noplag:noplag_dev_password@noplag-postgres:5432/noplag
+      # Optional: Configure corpus size and performance
+      # MAX_WORKERS: 4
+      # CHUNK_BATCH_SIZE: 100
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount folder for custom corpus (optional)
+      - ./noplag-corpus:/app/corpus
+    networks:
+      - noplag-network
+    restart: unless-stopped
+
+volumes:
+  noplag-postgres-data:
+    driver: local
+
+networks:
+  noplag-network:
+    driver: bridge

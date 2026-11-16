@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { ScanReport, MatchedSource, HighlightedSnippet } from '../types';
-import { TurnitScopeLogo } from './TurnitScopeLogo';
+import { useApp } from '../context/AppContext';
+import { OriginalityCheckLogo } from './OriginalityCheckLogo';
 import { cleanText, MAX_SIMILARITY_SCORE } from '../utils/documentParser';
-import { downloadReportPdf } from '../utils/pdfGenerator';
+import { downloadReportPdf, formatTurnitinSubmissionId } from '../utils/pdfGenerator';
 import { TurnitinOfficialMultiPageReport } from './TurnitinOfficialMultiPageReport';
+import { ClassicReport } from './ClassicReport';
 import {
   X,
   Download,
@@ -36,6 +38,7 @@ interface ReportModalProps {
 }
 
 export const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => {
+  const { currentUser } = useApp();
   const [activeMode, setActiveMode] = useState<'all' | 'similarity' | 'ai' | 'comparison'>(() =>
     report?.type === 'AI Detection' ? 'ai' : report?.type === 'Plagiarism Check' ? 'similarity' : 'all'
   );
@@ -51,6 +54,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => 
 
   const hasAiReport = report?.type === 'AI Detection' || report?.type === 'Both';
   const hasSimilarityReport = report?.type === 'Plagiarism Check' || report?.type === 'Both';
+  const isClassicReport = report?.reportStyle === 'classic' || Boolean(report?.classicAuthor?.trim());
 
   useEffect(() => {
     if (!report) return;
@@ -62,7 +66,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => 
   // Display only text extracted from the uploaded document.
   const cleanedContent = cleanText(report.text || '');
 
-  // Calculate dynamic similarity score based on filters strictly within 1% to 12%
+  // Calculate dynamic similarity score based on filters strictly within 1% to 40%
   let adjustedPlagScore = report.plagiarismScore > 0
     ? Math.min(MAX_SIMILARITY_SCORE, Math.max(1, report.plagiarismScore))
     : 0;
@@ -73,16 +77,16 @@ export const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => 
     ? Math.min(MAX_SIMILARITY_SCORE, Math.max(1, adjustedPlagScore))
     : 0;
 
-  const submissionId = report.submissionId || `trn:oid:${Math.floor(21948194812)}`;
+  const submissionId = formatTurnitinSubmissionId(report.submissionId);
 
   // Format AI score display: 1% to 20% shows *%, >20% shows exact %, 0% shows 0%
   const isAiUnderThreshold = report.aiScore > 0 && report.aiScore <= 20;
   const aiScoreDisplay = isAiUnderThreshold ? '*%' : (report.aiScore > 20 ? `${report.aiScore}%` : '0%');
 
-  // Default sources if none are present (0-12% similarity breakdown)
+  // Default sources if none are present (0–40% similarity breakdown)
   const sources: MatchedSource[] = report.sources && report.sources.length > 0 ? report.sources : [
     { id: 's1', name: 'ScienceDirect / Elsevier Academic Archive', url: 'https://sciencedirect.com/science/article/pii', similarity: Math.max(2, Math.floor(adjustedPlagScore * 0.58)), type: 'publication' },
-    { id: 's2', name: 'Harvard University Scholar Repository', url: 'https://harvard.edu/dash/handle/291', similarity: Math.max(1, Math.floor(adjustedPlagScore * 0.27)), type: 'student_paper' },
+    { id: 's2', name: 'core.ac.uk', url: 'https://core.ac.uk', similarity: Math.max(1, Math.floor(adjustedPlagScore * 0.27)), type: 'internet' },
     { id: 's3', name: 'IEEE Computer Society Digital Library', url: 'https://ieeexplore.ieee.org/document/89201', similarity: Math.max(1, Math.floor(adjustedPlagScore * 0.15)), type: 'publication' },
   ];
 
@@ -131,7 +135,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => 
   const handleDownloadPdf = async () => {
     try {
       setIsExportingPdf(true);
-      await downloadReportPdf(report);
+      await downloadReportPdf(report, 'similarity', undefined, currentUser?.name);
     } catch (err) {
       console.error('PDF export error:', err);
     } finally {
@@ -153,7 +157,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => 
         {/* TOP BAR: Feedback Studio Header */}
         <header className="bg-[#1e293b] text-white px-5 py-3 flex items-center justify-between border-b border-slate-700 shrink-0 z-20">
           <div className="flex items-center gap-4 min-w-0">
-            <TurnitScopeLogo size="sm" variant="dark" showSubtitle={false} />
+            <OriginalityCheckLogo size="sm" variant="dark" showSubtitle={false} />
             <div className="h-5 w-px bg-slate-700 hidden sm:block" />
 
             {/* Document Info */}
@@ -168,7 +172,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => 
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 truncate">
-                Author: <span className="text-slate-200 font-semibold">{report.author}</span> • {report.date} • {report.wordCount.toLocaleString()} words • {report.characterCount.toLocaleString()} characters
+                Author: <span className="text-slate-200 font-semibold">{report.classicAuthor || report.author}</span> • {report.date} • {report.wordCount.toLocaleString()} words • {report.characterCount.toLocaleString()} characters
               </p>
             </div>
           </div>
@@ -177,7 +181,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             <div className="flex items-center bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700 text-xs font-bold text-white mr-1">
               <FileCheck className="w-3.5 h-3.5 mr-1.5" />
-              <span>Official Report (No Cutting)</span>
+              <span>{isClassicReport ? 'Classic Report' : 'Official Report (No Cutting)'}</span>
             </div>
 
             {/* View Digital Receipt */}
@@ -202,11 +206,17 @@ export const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => 
         </header>
 
         <div className="flex-1 overflow-hidden flex flex-col">
-          <TurnitinOfficialMultiPageReport
-            report={report}
-            defaultType={report.type === 'AI Detection' ? 'ai' : 'similarity'}
-            allowBothModes={report.type === 'Both'}
-          />
+          {isClassicReport ? (
+            <div className="flex-1 overflow-hidden flex flex-col">
+              <ClassicReport report={report} />
+            </div>
+          ) : (
+            <TurnitinOfficialMultiPageReport
+              report={report}
+              defaultType={report.type === 'AI Detection' ? 'ai' : 'similarity'}
+              allowBothModes={report.type === 'Both'}
+            />
+          )}
         </div>
 
         {/* DIGITAL RECEIPT MODAL */}

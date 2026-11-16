@@ -1,23 +1,31 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { isAdminEmail, useApp } from '../context/AppContext';
 import {
   Bell,
   Shield,
-  Sparkles,
   X,
-  CheckCircle,
   ArrowRight,
   LogOut,
   UserCog,
   CheckCheck,
+  Moon,
+  Sun,
 } from 'lucide-react';
+import { InstallAppButton } from './InstallAppButton';
 
 interface ClientHeaderProps {
   title: string;
   iconSuffix?: string;
+  isDarkMode: boolean;
+  onToggleDarkMode: () => void;
 }
 
-export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix }) => {
+export const ClientHeader: React.FC<ClientHeaderProps> = ({
+  title,
+  iconSuffix,
+  isDarkMode,
+  onToggleDarkMode,
+}) => {
   const {
     currentUser,
     setActivePanel,
@@ -26,7 +34,6 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
     transactions,
     signOutAuth,
     notification,
-    setNotification,
   } = useApp();
 
   const [showNotifications, setShowNotifications] = useState(false);
@@ -35,6 +42,9 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
   const [isDismissedManual, setIsDismissedManual] = useState(false);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const alertDismissTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const notificationPanelRef = useRef<HTMLDivElement>(null);
+  const notificationButtonRef = useRef<HTMLButtonElement>(null);
 
   // Auto-diminish notification after 5 seconds without any progress counters
   useEffect(() => {
@@ -44,11 +54,12 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
     setIsDismissedManual(false);
 
     if (timerRef.current) clearTimeout(timerRef.current);
+    if (alertDismissTimerRef.current) clearTimeout(alertDismissTimerRef.current);
 
     // After 5 seconds, smoothly diminish the bell badge and ringing effect
     timerRef.current = setTimeout(() => {
       setIsDiminishing(true);
-      setTimeout(() => {
+      alertDismissTimerRef.current = setTimeout(() => {
         setHasActiveAlert(false);
         setIsDiminishing(false);
       }, 500);
@@ -56,8 +67,33 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
 
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
+      if (alertDismissTimerRef.current) clearTimeout(alertDismissTimerRef.current);
     };
   }, [notification, transactions.length]);
+
+  useEffect(() => {
+    if (!showNotifications) return;
+
+    const handleOutsidePointer = (event: PointerEvent) => {
+      if (!notificationPanelRef.current?.contains(event.target as Node)
+        && !notificationButtonRef.current?.contains(event.target as Node)) {
+        setShowNotifications(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowNotifications(false);
+        notificationButtonRef.current?.focus();
+      }
+    };
+
+    document.addEventListener('pointerdown', handleOutsidePointer);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handleOutsidePointer);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showNotifications]);
 
   const handleToggleNotifications = () => {
     const nextState = !showNotifications;
@@ -85,24 +121,37 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
         .slice(0, 4);
 
   return (
-    <header className="border-b border-slate-200/80 bg-white/95 backdrop-blur-md px-3 sm:px-6 py-3 sm:py-0 h-auto sm:h-16 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sticky top-0 z-20">
-      {/* Page Title with Emoji */}
-      <div className="flex items-center gap-3 min-w-0 px-1 sm:px-0">
-        <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight truncate" id="header-page-title">
+    <header className="relative z-20 flex min-h-14 items-center justify-between gap-2 border-b border-slate-200/80 bg-white/95 px-3 py-2 backdrop-blur-md sm:sticky sm:top-0 sm:min-h-16 sm:px-6 sm:py-0">
+      <div className="flex min-w-0 items-center gap-3">
+        <h1 className="truncate text-base font-bold tracking-tight text-slate-900 sm:text-xl" id="header-page-title">
           {title}{iconSuffix ? ` ${iconSuffix}` : ''}
         </h1>
       </div>
 
       {/* Right Controls: Notification Bell, Auth pill, Admin Panel Switcher */}
-      <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-4 flex-wrap w-full sm:w-auto">
+      <div className="flex w-auto shrink-0 items-center justify-end gap-1.5 sm:gap-3">
+        <button
+          type="button"
+          onClick={onToggleDarkMode}
+          className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+          aria-label={`Switch to ${isDarkMode ? 'light' : 'dark'} mode`}
+          aria-pressed={isDarkMode}
+          title={`Switch to ${isDarkMode ? 'light' : 'dark'} mode`}
+        >
+          {isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+        </button>
+
         {/* Notification Bell with 5s Diminishing Badge */}
         <div className="relative">
           <button
             onClick={handleToggleNotifications}
-            className="relative p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition group focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            className="group relative flex h-10 w-10 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 sm:h-11 sm:w-11"
             id="btn-header-bell"
             title={hasActiveAlert ? 'New Notifications' : 'Activity & Notifications'}
             aria-label="Notifications"
+            aria-expanded={showNotifications}
+            aria-controls="header-notifications-panel"
+            ref={notificationButtonRef}
           >
             <Bell
               className={`w-5 h-5 transition-all duration-500 ${
@@ -129,16 +178,22 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
 
           {/* Notifications Dropdown */}
           {showNotifications && (
-            <div className="absolute right-0 mt-2 w-84 bg-white rounded-2xl shadow-xl border border-slate-200 p-4 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+            <div
+              ref={notificationPanelRef}
+              id="header-notifications-panel"
+              role="dialog"
+              aria-labelledby="header-notifications-title"
+              className="fixed inset-x-3 top-[calc(env(safe-area-inset-top)+7.5rem)] z-[60] max-h-[min(70vh,32rem)] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-xl animate-in fade-in slide-in-from-top-2 duration-150 sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-[min(24rem,calc(100vw-2rem))]"
+            >
               <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                 <div className="flex items-center gap-2">
                   <Bell className="w-4 h-4 text-indigo-600" />
-                  <span className="text-xs font-bold text-slate-900">Activity & Credit Alerts</span>
+                  <span id="header-notifications-title" className="text-xs font-bold text-slate-900">Activity & Credit Alerts</span>
                 </div>
                 <div className="flex items-center gap-1">
                   <button
                     onClick={handleMarkAllAsRead}
-                    className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium px-2 py-0.5 rounded hover:bg-indigo-50 transition flex items-center gap-1"
+                    className="flex min-h-11 items-center gap-1 rounded-lg px-2 text-[11px] font-medium text-indigo-600 transition hover:bg-indigo-50 hover:text-indigo-800"
                     title="Mark all as read"
                   >
                     <CheckCheck className="w-3 h-3" />
@@ -146,8 +201,9 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
                   </button>
                   <button
                     onClick={() => setShowNotifications(false)}
-                    className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+                    className="flex h-11 w-11 items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40"
                     title="Close"
+                    aria-label="Close notifications"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
@@ -163,17 +219,20 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
               )}
 
               {/* Recent Alerts List */}
-              <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto mt-2">
+              <div className="mt-2 divide-y divide-slate-100">
                 {recentAlerts.length === 0 ? (
                   <div className="py-6 text-center text-xs text-slate-400">
                     All caught up! No unread notifications
                   </div>
                 ) : (
-                  recentAlerts.map(tx => (
+                  recentAlerts.map(tx => {
+                    const isScanDeduction = tx.type === 'scan_deduction' || (Boolean(tx.note) && tx.note.toLowerCase().includes('scanned document'));
+                    const displayAmount = isScanDeduction ? -1 : (tx.amount === -5 ? -1 : tx.amount);
+                    return (
                     <div key={tx.id} className="py-2.5 flex items-start gap-2.5">
                       <div
                         className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
-                          tx.amount >= 0 ? 'bg-emerald-500' : 'bg-indigo-500'
+                          displayAmount >= 0 ? 'bg-emerald-500' : 'bg-indigo-500'
                         }`}
                       />
                       <div className="min-w-0 flex-1">
@@ -184,46 +243,33 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
                       </div>
                       <span
                         className={`text-xs font-bold ${
-                          tx.amount >= 0 ? 'text-emerald-600' : 'text-slate-600'
+                          displayAmount >= 0 ? 'text-emerald-600' : 'text-slate-600'
                         }`}
                       >
-                        {tx.amount > 0 ? `+${tx.amount}` : tx.amount}
+                        {displayAmount > 0 ? `+${displayAmount}` : displayAmount}
                       </span>
                     </div>
-                  ))
+                  );})
                 )}
               </div>
 
-              <div className="pt-2.5 border-t border-slate-100 mt-2 flex items-center justify-between text-xs font-semibold">
-                <button
-                  onClick={() => {
-                    setNotification({ message: 'Sample test notification alert triggered', type: 'info' });
-                  }}
-                  className="text-slate-500 hover:text-slate-800 text-[11px] py-1 font-medium transition"
-                  title="Test notification"
-                >
-                  Test alert
-                </button>
-                <button
-                  onClick={() => {
-                    setShowNotifications(false);
-                  }}
-                  className="text-indigo-600 hover:text-indigo-800 py-1"
-                >
-                  Recent activity →
-                </button>
+              <div className="mt-2 border-t border-slate-100 pt-3 text-center text-[11px] text-slate-500">
+                Credit and scan activity for this account
               </div>
             </div>
           )}
         </div>
 
+        <InstallAppButton compact />
+
         {/* User Auth Profile & Sign Out */}
-        <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/80 rounded-xl p-1 shadow-sm min-w-0">
+        <div className="flex min-w-0 items-center gap-1 rounded-xl border border-slate-200/80 bg-slate-50 p-1 shadow-sm">
           <button
             onClick={() => setIsProfileModalOpen(true)}
-            className="flex items-center gap-2 px-2 py-1 text-xs font-semibold text-slate-800 hover:bg-white rounded-lg transition cursor-pointer group min-w-0"
+            className="group flex min-h-9 min-w-0 items-center gap-2 rounded-lg px-1.5 py-1 text-xs font-semibold text-slate-800 transition hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40 sm:px-2"
             id="header-user-badge"
             title="Click to view & edit your profile"
+            aria-label={`Open profile settings for ${currentUser.name || 'your account'}`}
           >
             {currentUser.photoURL ? (
               <img
@@ -245,9 +291,10 @@ export const ClientHeader: React.FC<ClientHeaderProps> = ({ title, iconSuffix })
 
           <button
             onClick={() => signOutAuth()}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/40"
             title="Sign Out of TurnitScope"
             id="btn-header-signout"
+            aria-label="Sign out"
           >
             <LogOut className="w-3.5 h-3.5" />
           </button>

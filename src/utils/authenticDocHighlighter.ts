@@ -6,12 +6,18 @@ import {
   isTableHeadingOrCaption,
   isTableRowOrData,
   isTableText,
+  isFigureOrGraphText,
+  isMainHeadingText,
+  isGlossaryOrTermTableText,
   isQuoteText,
   isBibliographyHeading,
   isCitationLine,
   isBibliographyOrReferenceText,
   isExcludedFromHighlighting,
   clampSimilarityScore,
+  countWords,
+  selectIndicesForWordShare,
+  splitIntoSentencesWithSpans,
 } from './documentParser';
 
 export interface RawTextItem {
@@ -86,13 +92,13 @@ export const SIMILARITY_THEMES: Record<number, HighlightColorTheme> = {
 
 /**
  * AI Writing highlight theme:
- * Distinct light-blue wash.
+ * Turquoise-cyan highlight for AI-detected text.
  */
 export const AI_THEME: HighlightColorTheme = {
-  bg: 'rgba(147, 197, 253, 0.70)', // prominent light blue wash
-  pdfColor: { r: 0.58, g: 0.78, b: 0.98 },
-  badgeBg: '#3b82f6',
-  textColor: '#1e40af',
+  bg: '#AFEBF0',
+  pdfColor: { r: 175 / 255, g: 235 / 255, b: 240 / 255 },
+  badgeBg: '#0891b2',
+  textColor: '#000000',
   isUnderlined: false,
 };
 
@@ -191,19 +197,23 @@ function buildVisualLine(items: RawTextItem[]): VisualLine {
  */
 function isTabularVisualLine(line: VisualLine): boolean {
   if (isTableText(line.lineText)) return true;
+  if (isGlossaryOrTermTableText(line.lineText)) return true;
 
-  // Check horizontal column gaps between items in the line
+  // Check horizontal column gaps between items in the line (Term | Meaning style)
   if (line.items.length >= 2) {
     let columnGaps = 0;
+    let maxGap = 0;
     for (let i = 0; i < line.items.length - 1; i++) {
       const cur = line.items[i];
       const next = line.items[i + 1];
       const gap = next.left - (cur.left + cur.width);
-      if (gap >= 20 || gap >= Math.max(10, line.fontSize) * 2.0) {
+      maxGap = Math.max(maxGap, gap);
+      if (gap >= 14 || gap >= Math.max(8, line.fontSize) * 1.4) {
         columnGaps++;
       }
     }
-    if (columnGaps >= 1 && (line.items.length >= 3 || columnGaps >= 2)) {
+    // Two clusters with a clear gutter = table/card row
+    if (columnGaps >= 1 || maxGap >= 28) {
       return true;
     }
   }
@@ -225,12 +235,46 @@ function isTabularVisualLine(line: VisualLine): boolean {
   return false;
 }
 
+/** True when the page is mostly a glossary / 2-column table / card grid (no AI highlights). */
+function isMostlyTabularOrGlossaryPage(lines: VisualLine[], pageWidth: number): boolean {
+  if (lines.length < 3) return false;
+
+  const hasTermMeaningHeader = lines.some(l => {
+    const t = l.lineText.toLowerCase();
+    return (
+      /\bterm\b/.test(t) && /\b(meaning|definition)\b/.test(t)
+    ) || /^term$/i.test(l.lineText.trim()) || /^meaning$/i.test(l.lineText.trim());
+  });
+
+  const glossaryHits = lines.filter(l => isGlossaryOrTermTableText(l.lineText)).length;
+  const tabularHits = lines.filter(l => isTabularVisualLine(l)).length;
+
+  // Mid-page split: many lines start in left half AND many in right half (card grid / 2-col table)
+  const midX = pageWidth * 0.42;
+  const leftOnly = lines.filter(l => l.left + l.width < midX + 20).length;
+  const rightOnly = lines.filter(l => l.left > midX - 10).length;
+  const dualColumnLayout = leftOnly >= 3 && rightOnly >= 3 && leftOnly + rightOnly >= lines.length * 0.55;
+
+  // Short promotional / card-style lines dominate (cover pages)
+  const shortLines = lines.filter(l => l.lineText.trim().length > 0 && l.lineText.trim().length <= 55).length;
+  const longProse = lines.filter(l => l.lineText.trim().length >= 90).length;
+  const coverOrCardPage = shortLines >= 6 && longProse <= 1 && lines.length <= 20;
+
+  if (hasTermMeaningHeader && longProse <= 1) return true;
+  if ((glossaryHits >= 3 || glossaryHits / lines.length >= 0.25) && longProse <= 1) return true;
+  if ((tabularHits >= 3 || tabularHits / lines.length >= 0.45) && longProse <= 1) return true;
+  if (dualColumnLayout && longProse <= 1) return true;
+  if (coverOrCardPage && (dualColumnLayout || tabularHits >= 2 || shortLines >= 8)) return true;
+
+  return false;
+}
+
 /**
  * Computes Turnitin highlight overlay rectangles directly on the authentic PDF document page.
  * Strictly respects:
- * - Plagiarism Similarity 1% to 12% limit with 4-color rotation and badge indicators.
- * - Excludes Table of Contents, Tables, References, and Quotes.
- * - AI Writing: 0% highlight for scores <= 20% (*% rule), light blue highlights for >= 21%.
+ * - Plagiarism Similarity 1% to 40% limit with 4-color rotation and badge indicators.
+ * - Excludes TOC, Tables, Images, Graphs/Figures, References, and main headings in both AI and Similarity.
+ * - AI Writing: highlights the score-matched share of eligible words above 20%.
  */
 export function computeHighlightsForPage(
   items: RawTextItem[],
@@ -242,7 +286,7 @@ export function computeHighlightsForPage(
 ): DocHighlightBox[] {
   const isSimilarity = mode === 'similarity';
   const plagScore = clampSimilarityScore(report.plagiarismScore || 0);
-  const aiScore = report.aiScore || 0;
+  const aiScore = Number.isFinite(report.aiScore) ? Math.max(0, report.aiScore) : 0;
 
   // If Similarity mode and 0% plagiarism score, nothing to highlight
   if (isSimilarity && plagScore === 0) return [];
@@ -252,6 +296,17 @@ export function computeHighlightsForPage(
 
   const lines = groupItemsIntoLines(items, pageHeight);
   if (lines.length === 0) return [];
+
+  // Median body font size — lines notably larger are treated as bold/main headings
+  const fontSizes = [...lines.map(l => l.fontSize)].sort((a, b) => a - b);
+  const medianFontSize = fontSizes[Math.floor(fontSizes.length / 2)] || 12;
+  const isVisuallyBoldHeading = (line: VisualLine): boolean => {
+    if (line.fontSize < medianFontSize * 1.15) return false;
+    const trimmed = line.lineText.trim();
+    if (trimmed.length < 2 || trimmed.length > 100) return false;
+    if (/[.!?]$/.test(trimmed) && trimmed.length > 40) return false;
+    return true;
+  };
 
   // 1. PAGE-LEVEL EXCLUSION: TABLE OF CONTENTS
   // If the page contains a TOC heading, or >= 2 lines ending with page numbers/dot leaders,
@@ -266,6 +321,11 @@ export function computeHighlightsForPage(
     return [];
   }
 
+  // 1b. PAGE-LEVEL EXCLUSION: glossary tables, Term/Meaning grids, cover card layouts
+  if (isMostlyTabularOrGlossaryPage(lines, pageWidth)) {
+    return [];
+  }
+
   // 2. DOCUMENT & PAGE-LEVEL EXCLUSION: REFERENCES / BIBLIOGRAPHY
   const reportObj = report as any;
   if (reportObj._bibStartPageIndex !== undefined && pageIndex > reportObj._bibStartPageIndex) {
@@ -275,6 +335,15 @@ export function computeHighlightsForPage(
 
   const bibHeadingLineIdx = lines.findIndex(l => isBibliographyHeading(l.lineText));
   const citationLines = lines.filter(l => isCitationLine(l.lineText));
+  const glossaryHeadingLineIdx = lines.findIndex(l => {
+    const t = l.lineText.trim().toLowerCase();
+    return (
+      t === 'glossary' ||
+      t.startsWith('glossary ') ||
+      /^\d+(\.\d+)*\.?\s+glossary\b/i.test(l.lineText.trim()) ||
+      /\bglossary and further (learning|reading)\b/i.test(l.lineText)
+    );
+  });
 
   // If the page has 3+ citations, or >= 30% of its lines are citations -> Entire page is References
   if (citationLines.length >= 3 || (lines.length >= 3 && citationLines.length / lines.length >= 0.3)) {
@@ -290,11 +359,21 @@ export function computeHighlightsForPage(
     }
   }
 
-  // 3. LINE-BY-LINE FILTERING (TABLES, REMAINING REFERENCES, TOC, AND QUOTES)
+  // Glossary / term-table pages: never highlight in AI or Similarity
+  if (glossaryHeadingLineIdx !== -1) {
+    return [];
+  }
+
+  // 3. LINE-BY-LINE FILTERING (TABLES, GRAPHS, HEADINGS, REFERENCES, TOC, QUOTES)
   const excludeQuotes = report.excludeQuotes !== false;
   let inBib = false;
   let inTableBlock = false;
-  let tableEndCountdown = 0;
+  let inFigureBlock = false;
+  let inGlossaryBlock = glossaryHeadingLineIdx !== -1;
+  const looksLikeSectionHeading = (text: string, visualLine: VisualLine): boolean =>
+    isMainHeadingText(text) ||
+    isVisuallyBoldHeading(visualLine) ||
+    /^\d+(\.\d+)*\.?\s+[A-Z]/.test(text.trim());
 
   const eligibleLineIndices: number[] = [];
 
@@ -309,37 +388,69 @@ export function computeHighlightsForPage(
     if (isBibliographyHeading(lineText)) inBib = true;
     if (inBib || isBibliographyOrReferenceText(lineText)) continue;
 
+    // Glossary / further learning blocks
+    if (glossaryHeadingLineIdx !== -1 && i >= glossaryHeadingLineIdx) {
+      inGlossaryBlock = true;
+    }
+    if (/^(glossary|further learning|further reading|key terms)\b/i.test(lineText.trim())) {
+      inGlossaryBlock = true;
+    }
+    if (inGlossaryBlock || isGlossaryOrTermTableText(lineText)) continue;
+
     // Table of Contents
     if (isTableOfContentsText(lineText)) continue;
 
-    // Tables: check for captions, headers, tabular columns, or table blocks
-    if (isTableHeadingOrCaption(lineText)) {
-      inTableBlock = true;
-      tableEndCountdown = 4;
+    // Graphs / figures / charts / images — skip caption and nearby labels until body/heading
+    if (isFigureOrGraphText(lineText)) {
+      inFigureBlock = true;
       continue;
     }
+    if (inFigureBlock) {
+      const isBodyProse = lineText.trim().length >= 90 && /[.!?]/.test(lineText);
+      if (
+        looksLikeSectionHeading(lineText, line) ||
+        isTableHeadingOrCaption(lineText) ||
+        isBodyProse
+      ) {
+        inFigureBlock = false;
+      } else {
+        continue;
+      }
+    }
 
+    // Tables stay excluded until the next real section heading
+    if (isTableHeadingOrCaption(lineText) || /^(term|meaning|definition)s?\b/i.test(lineText.trim())) {
+      inTableBlock = true;
+      continue;
+    }
     if (isTabularVisualLine(line)) {
       inTableBlock = true;
-      tableEndCountdown = 3;
       continue;
     }
-
     if (inTableBlock) {
-      tableEndCountdown--;
-      if (tableEndCountdown <= 0) {
+      if (looksLikeSectionHeading(lineText, line) && !isTableHeadingOrCaption(lineText) && !isTabularVisualLine(line)) {
         inTableBlock = false;
       } else {
         continue;
       }
     }
 
-    // Never allow either AI or similarity highlights on TOC, table, or reference lines.
+    // Main / bold headings — never highlighted in AI or Similarity
+    if (looksLikeSectionHeading(lineText, line)) continue;
+
+    // Cover taglines with multiple mid-line bullets, not body list items
+    const bulletCount = (lineText.match(/[•·▪]/g) || []).length;
+    if (bulletCount >= 2 && lineText.length <= 120) continue;
+
+    // Never allow AI/similarity highlights on TOC, table, graph, heading, or reference lines.
     if (
       isTableOfContentsText(lineText) ||
       isTableHeadingOrCaption(lineText) ||
       isTableRowOrData(lineText) ||
       isTabularVisualLine(line) ||
+      isFigureOrGraphText(lineText) ||
+      isGlossaryOrTermTableText(lineText) ||
+      isMainHeadingText(lineText) ||
       isBibliographyOrReferenceText(lineText) ||
       isExcludedFromHighlighting(lineText)
     ) continue;
@@ -380,14 +491,11 @@ export function computeHighlightsForPage(
       combinedText += `${lineText} `;
     }
 
-    const sentencePattern = /[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g;
-    for (const match of combinedText.matchAll(sentencePattern)) {
-      const rawSentence = match[0];
-      const leadingWhitespace = rawSentence.length - rawSentence.trimStart().length;
-      const sentenceStart = (match.index ?? 0) + leadingWhitespace;
-      const sentenceText = rawSentence.trim();
-      const sentenceEnd = sentenceStart + sentenceText.length;
-      if (sentenceText.length < 15 || isExcludedFromHighlighting(sentenceText)) continue;
+    for (const span of splitIntoSentencesWithSpans(combinedText)) {
+      const sentenceStart = span.start;
+      const sentenceText = span.text;
+      const sentenceEnd = span.end;
+      if (sentenceText.length < 8 || isExcludedFromHighlighting(sentenceText)) continue;
       if (excludeQuotes && isQuoteText(sentenceText)) continue;
 
       const lineRanges = offsets
@@ -401,12 +509,11 @@ export function computeHighlightsForPage(
 
       if (lineRanges.length === 0) continue;
       const normalizedSentence = sentenceText.toLowerCase();
-      const matchingSnippet = report.snippets?.find(snippet => {
-        const expectedType = isSimilarity ? 'plagiarized' : 'ai_generated';
-        return snippet.type === expectedType &&
-          (normalizedSentence.includes(snippet.text.toLowerCase()) ||
-            snippet.text.toLowerCase().includes(normalizedSentence));
-      });
+      const matchingSnippet = report.snippets?.find(snippet =>
+        snippet.type === 'plagiarized' &&
+        (normalizedSentence.includes(snippet.text.toLowerCase()) ||
+          snippet.text.toLowerCase().includes(normalizedSentence))
+      );
       sentences.push({
         text: sentenceText,
         sourceIndex: matchingSnippet?.sourceIndex,
@@ -415,11 +522,70 @@ export function computeHighlightsForPage(
     }
   }
 
+  if (!isSimilarity) {
+    if (sentences.length === 0) return [];
+    const wordCounts = sentences.map(sentence => countWords(sentence.text));
+    const selected = new Set(selectIndicesForWordShare(wordCounts, aiScore));
+    const highlightBoxes: DocHighlightBox[] = [];
+
+    sentences.forEach((sentence, sentenceIndex) => {
+      if (!selected.has(sentenceIndex)) return;
+      sentence.lineRanges.forEach((range, rangeIndex) => {
+        const line = lines[range.lineIdx];
+        const coversFullLine = range.start <= 1 && range.end >= Math.max(1, line.lineText.length - 1);
+        let left = coversFullLine ? line.left : Number.POSITIVE_INFINITY;
+        let right = coversFullLine ? line.left + line.width : Number.NEGATIVE_INFINITY;
+        let top = line.top;
+        let bottom = line.top + line.height;
+
+        if (!coversFullLine) {
+          let textOffset = 0;
+          for (const item of line.items) {
+            const itemText = item.str.trim();
+            const itemStart = textOffset;
+            const itemEnd = itemStart + itemText.length;
+            const overlapStart = Math.max(range.start, itemStart);
+            const overlapEnd = Math.min(range.end, itemEnd);
+            if (overlapEnd > overlapStart && itemText.length > 0) {
+              const itemLeft = item.left + item.width * ((overlapStart - itemStart) / itemText.length);
+              const itemRight = item.left + item.width * ((overlapEnd - itemStart) / itemText.length);
+              left = Math.min(left, itemLeft);
+              right = Math.max(right, itemRight);
+              top = Math.min(top, item.top);
+              bottom = Math.max(bottom, item.top + item.height);
+            }
+            textOffset = itemEnd + (item.str.endsWith(' ') ? 0 : 1);
+          }
+        }
+
+        if (!Number.isFinite(left) || right <= left) {
+          left = line.left;
+          right = line.left + line.width;
+        }
+        const padding = 0.5;
+        const boxLeft = Math.max(30, left - padding);
+        const boxTop = Math.max(48, top - padding);
+        const boxRight = Math.min(pageWidth - 30, right + padding);
+        const boxBottom = Math.min(pageHeight - 48, bottom + padding);
+        highlightBoxes.push({
+          id: `ai-hl-${pageIndex}-${sentenceIndex}-${rangeIndex}`,
+          left: boxLeft,
+          top: boxTop,
+          width: Math.max(1, boxRight - boxLeft),
+          height: Math.max(1, boxBottom - boxTop),
+          type: 'ai',
+          sourceIndex: 1,
+        });
+      });
+    });
+
+    return highlightBoxes;
+  }
+
   if (sentences.length === 0) return [];
   const matchingSentences = sentences.filter(sentence => sentence.sourceIndex !== undefined);
-  const selectionPool = isSimilarity && matchingSentences.length > 0 ? matchingSentences : sentences;
-  const score = isSimilarity ? plagScore : aiScore;
-  const targetCount = Math.max(1, Math.min(selectionPool.length, Math.round(score / 100 * sentences.length)));
+  const selectionPool = matchingSentences.length === 0 ? sentences : matchingSentences;
+  const targetCount = Math.max(1, Math.min(selectionPool.length, Math.round(plagScore / 100 * sentences.length)));
   const selectedPositions = new Set<number>();
   for (let i = 0; i < targetCount; i++) {
     selectedPositions.add(Math.min(
@@ -460,26 +626,27 @@ export function computeHighlightsForPage(
       }
 
       if (!Number.isFinite(left) || right <= left) return;
-      const padding = 1;
+      const padding = 0.5;
       const boxLeft = Math.max(30, left - padding);
       const boxTop = Math.max(48, top - padding);
       const boxRight = Math.min(pageWidth - 30, right + padding);
       const boxBottom = Math.min(pageHeight - 48, bottom + padding);
-      const showBadge = isSimilarity && rangeIndex === 0;
-      const sourceIndex = isSimilarity ? sentence.sourceIndex || ((sentenceIndex % 4) + 1) : 1;
+      const boxHeight = Math.max(1, boxBottom - boxTop);
+      const showBadge = rangeIndex === 0;
+      const sourceIndex = sentence.sourceIndex || ((sentenceIndex % 4) + 1);
 
       highlightBoxes.push({
         id: `hl-${pageIndex}-${sentenceIndex}-${range.lineIdx}`,
         left: boxLeft,
         top: boxTop,
         width: Math.max(1, boxRight - boxLeft),
-        height: Math.max(11, boxBottom - boxTop),
-        type: isSimilarity ? 'plagiarized' : 'ai',
+        height: boxHeight,
+        type: 'plagiarized',
         sourceIndex,
         showBadge,
         badgeNumber: sourceIndex,
         badgeLeft: Math.max(10, boxLeft - 15),
-        badgeTop: boxTop + (Math.max(11, boxBottom - boxTop) - 12) / 2,
+        badgeTop: boxTop + (Math.max(11, boxHeight) - 12) / 2,
       });
     });
   });

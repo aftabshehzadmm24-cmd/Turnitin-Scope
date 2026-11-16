@@ -1,0 +1,43 @@
+steps:
+  # Build the Docker image
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - build
+      - -t
+      - "gcr.io/$PROJECT_ID/originality-check-api:$COMMIT_SHA"
+      - -t
+      - "gcr.io/$PROJECT_ID/originality-check-api:latest"
+      - .
+
+  # Push to Container Registry
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - push
+      - --all-tags
+      - "gcr.io/$PROJECT_ID/originality-check-api"
+
+  # Deploy to Cloud Run
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - originality-check-api
+      - --image=gcr.io/$PROJECT_ID/originality-check-api:$COMMIT_SHA
+      - --region=us-central1
+      - --platform=managed
+      - --allow-unauthenticated
+      - --memory=1Gi
+      - --cpu=1
+      - --concurrency=80
+      - --min-instances=0
+      - --max-instances=10
+      - --port=3000
+      - --set-env-vars=NODE_ENV=production
+      - --set-secrets=TRUTHSCAN_API_KEY=TRUTHSCAN_API_KEY:latest
+
+images:
+  - "gcr.io/$PROJECT_ID/originality-check-api"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

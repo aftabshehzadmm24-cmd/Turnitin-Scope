@@ -1,5 +1,3 @@
-import mammoth from 'mammoth';
-import JSZip from 'jszip';
 import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import { HighlightedSnippet } from '../types';
@@ -18,13 +16,104 @@ export interface ExtractedDocumentData {
   wordCount?: number;
 }
 
-const MAX_DOCUMENT_WORDS = 30000;
+const MAX_DOCUMENT_WORDS = 60000;
 
-export const MAX_SIMILARITY_SCORE = 12;
+export const MAX_SIMILARITY_SCORE = 40;
 
 export function clampSimilarityScore(score: number): number {
   if (!Number.isFinite(score) || score <= 0) return 0;
   return Math.min(MAX_SIMILARITY_SCORE, score);
+}
+
+const WORD_COUNT_PATTERN = /[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu;
+
+export function countWords(text: string): number {
+  return text.match(WORD_COUNT_PATTERN)?.length ?? 0;
+}
+
+/**
+ * Pick whole-sentence indices so highlighted words ≈ scorePercent of eligible words.
+ * Sentences are never split. 88% AI highlights whole sentences in order until ~88% of
+ * eligible body words are covered (remaining sentences stay unhighlighted).
+ */
+export function selectIndicesForWordShare(wordCounts: number[], scorePercent: number): number[] {
+  const totalWords = wordCounts.reduce((sum, count) => sum + count, 0);
+  if (!Number.isFinite(scorePercent) || scorePercent <= 0 || totalWords <= 0) return [];
+
+  const clampedScore = Math.min(100, Math.max(0, scorePercent));
+  if (clampedScore >= 100) {
+    return wordCounts.map((_, index) => index);
+  }
+
+  const targetWords = Math.max(1, Math.round((clampedScore / 100) * totalWords));
+  const n = wordCounts.length;
+
+  // Estimate how many sentences we need by assuming average word count per sentence
+  const avgWords = totalWords / n;
+  let estimatedCount = Math.min(n, Math.max(1, Math.ceil(targetWords / avgWords)));
+
+  // Spread evenly across document positions (same as getExactCoveragePositions)
+  const pickEvenly = (count: number): number[] => {
+    const positions = new Set<number>();
+    for (let i = 0; i < count; i++) {
+      const pos = Math.min(n - 1, Math.max(0, Math.round(((i + 0.5) * n) / count)));
+      positions.add(pos);
+    }
+    return Array.from(positions).sort((a, b) => a - b);
+  };
+
+  // Grow until we hit the word target
+  let positions = pickEvenly(estimatedCount);
+  let covered = positions.reduce((s, idx) => s + (wordCounts[idx] ?? 0), 0);
+
+  while (covered < targetWords && estimatedCount < n) {
+    estimatedCount = Math.min(n, estimatedCount + Math.max(1, Math.ceil((n - estimatedCount) * 0.1)));
+    positions = pickEvenly(estimatedCount);
+    covered = positions.reduce((s, idx) => s + (wordCounts[idx] ?? 0), 0);
+  }
+
+  return positions;
+}
+
+/**
+ * Split text into sentences without breaking on abbreviations, initials, or decimals.
+ * Returns spans in the original string so highlights can start at the first word
+ * and end on the last word of each sentence.
+ */
+export function splitIntoSentencesWithSpans(text: string): Array<{ text: string; start: number; end: number }> {
+  if (!text) return [];
+
+  let protectedText = text;
+  const protect = (pattern: RegExp) => {
+    protectedText = protectedText.replace(pattern, match => match.replace(/\./g, '\u0001'));
+  };
+
+  protect(/\b(?:Inc|Ltd|LLC|Corp|Co|vs|Fig|Figs|Dr|Mr|Ms|Mrs|Prof|Jr|Sr|No|Vol|Pp|cf|al|etc|approx|Est|Dept|Univ|Ed|eds|p|pp)\./gi);
+  protect(/\b(?:U\.S|U\.K|E\.U|e\.g|i\.e|N\.A|P\.S)\./gi);
+  protect(/\b(?:Q[1-4]|FY)\s*\d{2,4}\b/gi);
+  protect(/(\d)\.(\d)/g);
+
+  const spans: Array<{ text: string; start: number; end: number }> = [];
+  const sentencePattern = /[^.!?]+(?:[.!?]["'”’)]*)+(?:\s+|$)|[^.!?]+$/g;
+
+  for (const match of protectedText.matchAll(sentencePattern)) {
+    const raw = match[0];
+    const leading = raw.length - raw.trimStart().length;
+    const trailingPad = raw.length - raw.trimEnd().length;
+    const start = (match.index ?? 0) + leading;
+    const innerLength = raw.length - leading - trailingPad;
+    if (innerLength <= 0) continue;
+    const end = start + innerLength;
+    const sentenceText = text.slice(start, end).trim();
+    if (!sentenceText) continue;
+    spans.push({ text: sentenceText, start, end: start + sentenceText.length });
+  }
+
+  return spans;
+}
+
+export function splitIntoSentences(text: string): string[] {
+  return splitIntoSentencesWithSpans(text).map(span => span.text);
 }
 
 export function arrayBufferToBase64(buffer: ArrayBuffer): string {
@@ -40,8 +129,9 @@ export function arrayBufferToBase64(buffer: ArrayBuffer): string {
 /**
  * Extracts clean, human-readable text and full rich structure (HTML, base64, page count, images, tables)
  * from uploaded files (DOCX, PDF, TXT).
- * For DOCX files: automatically converts to high-fidelity vector PDF via server-side LibreOffice,
- * preserving 100% of formatting, tables, TOC, images, logos, headers, footers, and real selectable text.
+ * DOCX files are converted to a vector PDF via server-side LibreOffice so the
+ * report uses rendered document pages rather than rebuilding pages from text.
+ * Pagination can still differ if the source uses fonts unavailable on the server.
  */
 export async function extractDocumentDataFromFile(file: File): Promise<ExtractedDocumentData> {
   const fileExt = file.name.split('.').pop()?.toLowerCase() || '';
@@ -53,8 +143,12 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
     if (fileExt === 'docx' || fileExt === 'doc') {
       let convertedPdfBase64 = '';
       let pdfPageCount = 0;
-      let conversionError = 'DOCX conversion failed. Please make sure LibreOffice is installed and try again.';
-      const converterBaseUrl = import.meta.env.VITE_DOCX_CONVERTER_URL?.replace(/\/$/, '');
+      let conversionError = 'DOCX page conversion service is unavailable. Please make sure the app server is running (npm run dev).';
+      const converterBaseUrl = (
+        import.meta.env.VITE_DOCX_CONVERTER_URL ||
+        import.meta.env.VITE_API_URL ||
+        ''
+      ).replace(/\/$/, '');
 
       // Convert DOC/DOCX to PDF before extracting text or continuing the scan.
       try {
@@ -65,6 +159,7 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ docxBase64: base64Data, fileName: file.name }),
+          signal: AbortSignal.timeout(120_000),
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || !json.success || !json.pdfBase64) {
@@ -79,10 +174,6 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
       } catch (srvErr) {
         console.warn('Server-side LibreOffice conversion notice:', srvErr);
         conversionError = srvErr instanceof Error ? srvErr.message : conversionError;
-      }
-
-      if (!convertedPdfBase64) {
-        throw new Error(`Original DOCX page conversion failed: ${conversionError}`);
       }
 
       // If converted to true vector PDF via LibreOffice, return vector PDF directly!
@@ -119,9 +210,9 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
         const clean = cleanText(extractedText);
         const words = clean.trim().split(/\s+/).filter(Boolean).length;
 
-        // Word limit check (30,000 words maximum)
-        if (words > 30000) {
-          throw new Error(`File exceeds the maximum limit of 30,000 words (detected ${words.toLocaleString()} words). Please upload a document with 30,000 words or fewer.`);
+        // Word limit check (60,000 words maximum)
+        if (words > 60000) {
+          throw new Error(`File exceeds the maximum limit of 60,000 words (detected ${words.toLocaleString()} words). Please upload a document with 60,000 words or fewer.`);
         }
 
         return {
@@ -135,6 +226,11 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
           wordCount: words,
         };
       }
+
+      throw new Error(
+        `DOCX page conversion failed (${conversionError}). Upload a PDF to preserve the original page layout.`
+      );
+    }
 
       /*
       const mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -184,9 +280,9 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
       // Split HTML into structured pages (preserving headings, tables, and images intact)
       const words = extractedText.trim().split(/\s+/).filter(Boolean).length;
 
-      // Word limit check (30,000 words maximum)
-      if (words > 30000) {
-        throw new Error(`File exceeds the maximum limit of 30,000 words (detected ${words.toLocaleString()} words). Please upload a document with 30,000 words or fewer.`);
+      // Word limit check (60,000 words maximum)
+      if (words > 60000) {
+        throw new Error(`File exceeds the maximum limit of 60,000 words (detected ${words.toLocaleString()} words). Please upload a document with 60,000 words or fewer.`);
       }
 
       const estimatedPages = Math.max(1, Math.ceil(words / 320));
@@ -202,7 +298,6 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
         wordCount: words,
       };
       */
-    }
 
     if (fileExt === 'pdf') {
       const mimeType = 'application/pdf';
@@ -247,9 +342,9 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
 
       const words = clean.trim().split(/\s+/).filter(Boolean).length;
 
-      // Word limit check (30,000 words maximum)
-      if (words > 30000) {
-        throw new Error(`File exceeds the maximum limit of 30,000 words (detected ${words.toLocaleString()} words). Please upload a document with 30,000 words or fewer.`);
+      // Word limit check (60,000 words maximum)
+      if (words > 60000) {
+        throw new Error(`File exceeds the maximum limit of 60,000 words (detected ${words.toLocaleString()} words). Please upload a document with 60,000 words or fewer.`);
       }
 
       return {
@@ -269,9 +364,9 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
       const cleaned = cleanText(text);
       const words = cleaned.trim().split(/\s+/).filter(Boolean).length;
 
-      // Word limit check (30,000 words maximum)
-      if (words > 30000) {
-        throw new Error(`File exceeds the maximum limit of 30,000 words (detected ${words.toLocaleString()} words). Please upload a document with 30,000 words or fewer.`);
+      // Word limit check (60,000 words maximum)
+      if (words > 60000) {
+        throw new Error(`File exceeds the maximum limit of 60,000 words (detected ${words.toLocaleString()} words). Please upload a document with 60,000 words or fewer.`);
       }
 
       const pages = Math.max(1, Math.ceil(words / 320));
@@ -294,6 +389,88 @@ export async function extractDocumentDataFromFile(file: File): Promise<Extracted
   }
 
   throw new Error('No readable text could be extracted from this document. Please upload a document with actual content to run the scan.');
+}
+
+/**
+ * Filters extracted document text for AI scanning by removing sections that should
+ * never be checked for AI authorship:
+ * - Table of Contents
+ * - Tables / tabular data / glossary tables
+ * - Graphs / figures / charts
+ * - References / bibliography / citation lines
+ * - Main headings (numbered sections, ALL-CAPS titles, common academic section titles)
+ *
+ * Returns only eligible body paragraphs joined as a single string, preserving their
+ * original wording so the API's annotation strings still match the source text.
+ */
+export function filterTextForAiScan(text: string): string {
+  if (!text) return '';
+
+  const rawParagraphs = cleanText(text).split(/\n\s*\n/);
+  const bodyParagraphs: string[] = [];
+  let inBibSection = false;
+  let inTocSection = false;
+  let inTableBlock = false;
+  let inFigureBlock = false;
+
+  for (const para of rawParagraphs) {
+    const trimmed = para.trim();
+    if (!trimmed) continue;
+
+    // Detect section starts
+    if (isBibliographyHeading(trimmed) || isBibliographyOrReferenceText(trimmed)) {
+      inBibSection = true;
+    }
+    if (isTableOfContentsHeading(trimmed) || isTableOfContentsText(trimmed)) {
+      inTocSection = true;
+    } else if (
+      inTocSection &&
+      (
+        (/^[0-9]+\.\s+[A-Za-z]/.test(trimmed) &&
+          !trimmed.includes('....') &&
+          !/\d+$/.test(trimmed)) ||
+        (trimmed.length >= 250 && /[.!?]/.test(trimmed) && !isTableOfContentsEntry(trimmed))
+      )
+    ) {
+      inTocSection = false; // TOC ended, body started
+    }
+
+    if (isTableHeadingOrCaption(trimmed) || isTableText(trimmed)) {
+      inTableBlock = true;
+    } else if (inTableBlock) {
+      inTableBlock = false;
+    }
+
+    if (isFigureOrGraphText(trimmed)) {
+      inFigureBlock = true;
+    } else if (
+      inFigureBlock &&
+      (isMainHeadingText(trimmed) || isTableHeadingOrCaption(trimmed) || (trimmed.length >= 90 && /[.!?]/.test(trimmed)))
+    ) {
+      inFigureBlock = false;
+    }
+
+    // Skip any excluded paragraph
+    if (
+      inBibSection ||
+      inTocSection ||
+      inTableBlock ||
+      inFigureBlock ||
+      isTableOfContentsText(trimmed) ||
+      isTableText(trimmed) ||
+      isGlossaryOrTermTableText(trimmed) ||
+      isFigureOrGraphText(trimmed) ||
+      isBibliographyOrReferenceText(trimmed) ||
+      isCitationLine(trimmed) ||
+      isMainHeadingText(trimmed)
+    ) {
+      continue;
+    }
+
+    bodyParagraphs.push(trimmed);
+  }
+
+  return bodyParagraphs.join('\n\n');
 }
 
 /**
@@ -387,6 +564,7 @@ export function isTableOfContentsHeading(text: string): boolean {
     lower === 'table of contents' ||
     lower === 'table of contents:' ||
     lower.startsWith('table of contents\n') ||
+    /^table of contents?\b/i.test(lower) ||
     lower === 'contents' ||
     lower === 'contents:' ||
     lower.startsWith('contents\n') ||
@@ -445,13 +623,172 @@ export function isTableHeadingOrCaption(text: string): boolean {
   if (!text) return false;
   const trimmed = text.trim();
 
+  if (isTableOfContentsHeading(trimmed)) return false;
+
   return (
     /^(Table|Cuadro|Tabla|Tab\.)\s+[0-9A-Za-z\.\-_]+[:\.\s\-]/i.test(trimmed) ||
     /^(Table|Cuadro|Tabla|Tab\.)\s+[0-9A-Za-z\.\-_]+$/i.test(trimmed) ||
+    /^Table\s+\d+\b/i.test(trimmed) ||
     /^Table\s*:\s*/i.test(trimmed) ||
-    /^(TABLE|CUADRO|TABLA)\s+[IVX0-9]+/i.test(trimmed) ||
-    /^Figure\s+[0-9A-Za-z\.\-_]+[:\.\s\-]/i.test(trimmed)
+    /^(TABLE|CUADRO|TABLA)\s+[IVX0-9]+/i.test(trimmed)
   );
+}
+
+/**
+ * Checks if a line is a Figure / Graph / Chart / Diagram / Image caption or label.
+ * These must never receive AI or Similarity highlights.
+ */
+export function isFigureOrGraphText(text: string): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+
+  return (
+    /^(Figure|Fig\.|Figura|Graph|Chart|Diagram|Plot|Illustration|Exhibit|Plate|Image|Photo|Photograph|Screenshot|Picture)\s+[0-9A-Za-z\.\-_]+(\s*[:.\-–—].*)?$/i.test(
+      trimmed
+    ) ||
+    /^(Figure|Fig\.|Figura|Graph|Chart|Diagram|Plot|Image|Photo)\s*[.:]\s*\S+/i.test(trimmed) ||
+    /^(FIGURE|FIG\.|GRAPH|CHART|DIAGRAM|PLOT|IMAGE|PHOTO)\s+[IVX0-9A-Za-z\.\-_]+/i.test(trimmed) ||
+    /^(Source|Fuente):\s*(Figure|Fig\.|Graph|Chart|Diagram|Image|Photo|Adapted from|Based on)/i.test(trimmed) ||
+    /^(Source|Fuente):\s*.{0,80}$/i.test(trimmed)
+  );
+}
+
+/**
+ * Checks if a line is a main / section heading (often bold in the source document).
+ * Headings must never receive AI highlights.
+ */
+export function isMainHeadingText(text: string): boolean {
+  if (!text) return false;
+  const trimmed = text.trim().replace(/\s+/g, ' ');
+  if (!trimmed || trimmed.length > 120) return false;
+
+  // Ends with sentence punctuation → body text, not a heading
+  if (/[.!?]$/.test(trimmed) && trimmed.length > 40) return false;
+
+  const lower = trimmed.toLowerCase();
+
+  // Common academic section titles (exact or lightly numbered)
+  const knownHeadings = [
+    'abstract',
+    'introduction',
+    'background',
+    'literature review',
+    'related work',
+    'methodology',
+    'materials and methods',
+    'methods',
+    'results',
+    'results and discussion',
+    'discussion',
+    'conclusion',
+    'conclusions',
+    'acknowledgement',
+    'acknowledgements',
+    'acknowledgment',
+    'acknowledgments',
+    'appendix',
+    'appendices',
+    'summary',
+    'executive summary',
+    'objectives',
+    'aim',
+    'aims',
+    'scope',
+    'limitations',
+    'future work',
+    'recommendation',
+    'recommendations',
+    'findings',
+    'analysis',
+    'data analysis',
+    'theoretical framework',
+    'research questions',
+    'hypothesis',
+    'chapter',
+    'glossary',
+    'further learning',
+    'further reading',
+    'key terms',
+    'terminology',
+    'index',
+  ];
+  if (knownHeadings.some(h => lower === h || lower === `${h}:`)) return true;
+  if (
+    /^([0-9]+(\.[0-9]+)*\.?\s+)?(abstract|introduction|background|literature review|related work|methodology|materials and methods|methods|results|discussion|conclusion|conclusions|acknowledgements?|appendix|summary|objectives?|recommendations?|findings|analysis|glossary|further learning|further reading|key terms)\s*:?$/i.test(
+      trimmed
+    )
+  ) {
+    return true;
+  }
+
+  // Numbered section headings: "1. Introduction", "2.1 Methods", "Chapter 3", "13. Glossary and Further Learning"
+  if (/^(chapter|section|unit|part|module)\s+[0-9ivxlcdm]+(\s*[:.\-–—]\s*.{0,80})?$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^\d+(\.\d+){0,3}\.?\s+[A-Z][\s\S]{1,90}$/.test(trimmed) && !/[.!?]$/.test(trimmed) && trimmed.length <= 100) {
+    return true;
+  }
+
+  // ALL-CAPS short headings (typical bold titles)
+  const lettersOnly = trimmed.replace(/[^A-Za-z]/g, '');
+  if (
+    lettersOnly.length >= 3 &&
+    lettersOnly.length <= 60 &&
+    trimmed.length <= 80 &&
+    trimmed === trimmed.toUpperCase() &&
+    /[A-Z]/.test(trimmed) &&
+    !/[.!?]$/.test(trimmed)
+  ) {
+    return true;
+  }
+
+  // Short Title / subtitle lines (allow curly apostrophes): "A Practical Beginner's Guide"
+  const titleCaseWords = trimmed.split(/\s+/);
+  if (
+    titleCaseWords.length >= 2 &&
+    titleCaseWords.length <= 10 &&
+    trimmed.length <= 80 &&
+    !/[.!?:,;]$/.test(trimmed) &&
+    titleCaseWords.every(w => /^[A-Z0-9][A-Za-z0-9\-''']*$/u.test(w) || /^(and|or|of|the|a|an|to|in|on|for)$/i.test(w)) &&
+    titleCaseWords.filter(w => /^[A-Z]/.test(w)).length >= Math.ceil(titleCaseWords.length * 0.6)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Glossary / term-definition table headers and rows (never AI-highlight).
+ */
+export function isGlossaryOrTermTableText(text: string): boolean {
+  if (!text) return false;
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+
+  if (/^(term|terms|meaning|definition|definitions|description)\s*$/i.test(trimmed)) return true;
+  if (/^term\s+meaning$/i.test(trimmed) || /^terms?\s+definitions?$/i.test(trimmed)) return true;
+  if (lower === 'glossary' || lower.startsWith('glossary ')) return true;
+
+  // "AI: Artificial intelligence..." or "AI — Artificial intelligence..."
+  if (trimmed.length <= 160 && /^[A-Z][A-Za-z0-9 /&\-]{0,40}\s*[:–—-]\s+[A-Z]/.test(trimmed)) return true;
+  // "Algorithm; A procedure for..." (term + semicolon definition)
+  if (/^[A-Z][A-Za-z0-9 /&\-]{1,40};\s+\S+/.test(trimmed)) return true;
+
+  // Short glossary term alone (1–4 words, no sentence punctuation)
+  if (
+    trimmed.length <= 40 &&
+    !/[.!?]$/.test(trimmed) &&
+    /^[A-Z][A-Za-z0-9 /&\-]{0,35}$/.test(trimmed) &&
+    trimmed.split(/\s+/).length <= 4 &&
+    !/^(The|This|That|These|Those|When|Where|What|How|Why|With|From)\b/.test(trimmed)
+  ) {
+    // Acronyms or capitalized glossary headwords
+    if (/^[A-Z]{2,12}$/.test(trimmed)) return true;
+    if (/^[A-Z][a-z]+(?:[ -][A-Z][a-z]+)?$/.test(trimmed)) return true;
+  }
+
+  return false;
 }
 
 /**
@@ -572,13 +909,6 @@ export function isCitationLine(text: string): boolean {
   if (/https?:\/\/doi\.org\//i.test(trimmed) || /doi:\s*10\.\d{4,9}\//i.test(trimmed)) return true;
   if (/ISBN(?:\s*-\s*1[03])?:\s*[\d\-]+/i.test(trimmed)) return true;
   if (/\b(vol\.|volume|no\.|issue|pp\.|pages)\s+\d+/i.test(trimmed) && /\b\d{4}\b/.test(trimmed)) return true;
-  if (
-    /\b(Journal of|Proceedings of|IEEE Transactions|ACM|Springer|Elsevier|Nature|Science|Wiley|Cambridge University Press|Oxford University Press)\b/i.test(
-      trimmed
-    )
-  ) {
-    return true;
-  }
   if (/^(Available at|Retrieved from|Accessed on):?\s*https?:\/\//i.test(trimmed)) return true;
   if (/^https?:\/\/[a-z0-9\.\-]+\.[a-z]{2,}/i.test(trimmed)) return true;
 
@@ -593,8 +923,9 @@ export function isBibliographyOrReferenceText(text: string): boolean {
 }
 
 /**
- * Unconditional Excluded Section Detector:
- * Table of Contents, Tables, and References must NEVER be highlighted (neither in AI nor Similarity).
+ * Unconditional Excluded Section Detector for BOTH Similarity and AI reports:
+ * TOC, Tables, Images, Graphs/Figures, Glossary, References, and main headings
+ * must never be highlighted.
  */
 export function isExcludedFromHighlighting(text: string): boolean {
   if (!text) return false;
@@ -602,10 +933,13 @@ export function isExcludedFromHighlighting(text: string): boolean {
   return (
     isTableOfContentsText(trimmed) ||
     isTableText(trimmed) ||
+    isFigureOrGraphText(trimmed) ||
+    isGlossaryOrTermTableText(trimmed) ||
     isBibliographyOrReferenceText(trimmed) ||
     isCitationLine(trimmed) ||
+    isMainHeadingText(trimmed) ||
     isQuoteText(trimmed) ||
-    (/^\d+\.?\s*(?:Introduction|Methods|Results|Discussion|Conclusion|References|Bibliography|Appendix)\b/i.test(trimmed) && /\d+$/.test(trimmed))
+    (/^\d+\.?\s*(?:Introduction|Methods|Results|Discussion|Conclusion|References|Bibliography|Appendix|Glossary)\b/i.test(trimmed) && /\d+$/.test(trimmed))
   );
 }
 
@@ -634,10 +968,10 @@ function getExactCoveragePositions(totalCandidates: number, targetCount: number)
 
 /**
  * Splits text into complete sentences and complete paragraphs with exact Turnitin rules:
- * - Table of Contents, Tables, and References are strictly unhighlighted (normal text).
- * - Similarity percentage strictly between 1% and 12% (capped at 12% max).
+ * - TOC, Tables, Graphs/Figures, References, and main headings are strictly unhighlighted.
+ * - Similarity percentage strictly between 1% and 40% (capped at 40% max).
  * - When aiScore <= 20: ZERO AI highlights! Text remains clean and normal.
- * - When aiScore > 20: Proportional complete sentence/paragraph AI highlights (~aiScore%).
+ * - When aiScore > 20: whole eligible sentences covering that share of body words (e.g. 80% AI → ~80% of eligible sentences).
  */
 export function generateSmartSnippets(
   fullText: string,
@@ -650,6 +984,7 @@ export function generateSmartSnippets(
   }
 ): HighlightedSnippet[] {
   const clampedPlagScore = clampSimilarityScore(plagiarismScore);
+  const clampedAiScore = Number.isFinite(aiScore) ? Math.min(100, Math.max(0, aiScore)) : 0;
   const excludeQuotes = filterOptions.excludeQuotes !== false;
 
   const cleaned = cleanText(fullText);
@@ -667,6 +1002,8 @@ export function generateSmartSnippets(
     const paragraphExcluded =
       isTableOfContentsText(trimmedPara) ||
       isTableText(trimmedPara) ||
+      isFigureOrGraphText(trimmedPara) ||
+      isMainHeadingText(trimmedPara) ||
       isBibliographyOrReferenceText(trimmedPara) ||
       isCitationLine(trimmedPara);
 
@@ -692,8 +1029,9 @@ export function generateSmartSnippets(
       inTableBlock = false;
     }
 
-    const rawSentences = para.match(/[^.!?]+[.!?]+(\s+|$)|[^.!?]+$/g) || [para];
-    for (const s of rawSentences) {
+    const rawSentences = splitIntoSentences(para);
+    const sentenceParts = rawSentences.length > 0 ? rawSentences : [para];
+    for (const s of sentenceParts) {
       const trimmed = s.trim();
       if (trimmed.length > 15) {
         const isBib =
@@ -711,13 +1049,15 @@ export function generateSmartSnippets(
           isTableHeadingOrCaption(trimmed) ||
           isTableRowOrData(trimmed) ||
           isTableText(trimmed);
+        const isFigure = isFigureOrGraphText(trimmed);
+        const isHeading = isMainHeadingText(trimmed);
 
         if (excludeQuotes && isQuoteText(trimmed)) {
           quoteSentenceIndices.add(sentences.length);
           continue;
         }
 
-        if (isBib || isToc || isTable || isExcludedFromHighlighting(trimmed)) {
+        if (isBib || isToc || isTable || isFigure || isHeading || isExcludedFromHighlighting(trimmed)) {
           continue;
         }
 
@@ -751,16 +1091,12 @@ export function generateSmartSnippets(
   const eligibleEntries = eligibleIndices.map(index => ({
     index,
     text: sentences[index],
-    wordCount: sentences[index].split(/\s+/).filter(Boolean).length,
+    wordCount: countWords(sentences[index]),
   }));
 
   const eligibleWordCount = eligibleEntries.reduce((sum, entry) => sum + entry.wordCount, 0);
   const plagiarismTargetWords = clampedPlagScore > 0 && eligibleWordCount > 0
     ? Math.max(1, Math.round((clampedPlagScore / 100) * eligibleWordCount))
-    : 0;
-
-  const aiTargetWords = aiScore > 20 && eligibleWordCount > 0
-    ? Math.max(1, Math.round((aiScore / 100) * eligibleWordCount))
     : 0;
 
   const plagIndices = new Set<number>();
@@ -778,30 +1114,29 @@ export function generateSmartSnippets(
     }
   }
 
-  const aiIndices = new Set<number>();
-  let usedAiWords = 0;
-  if (aiTargetWords > 0 && eligibleEntries.length > 0) {
-    const sorted = [...eligibleEntries]
-      .filter(entry => !plagIndices.has(entry.index))
-      .sort((a, b) => a.wordCount - b.wordCount);
-    for (const entry of sorted) {
-      if (usedAiWords >= aiTargetWords) break;
-      aiIndices.add(entry.index);
-      usedAiWords += entry.wordCount;
-    }
+  const aiSentenceIndices = new Set<number>();
+  if (clampedAiScore > 20 && eligibleEntries.length > 0) {
+    const localSelected = selectIndicesForWordShare(
+      eligibleEntries.map(entry => entry.wordCount),
+      clampedAiScore
+    );
+    localSelected.forEach(localIndex => {
+      aiSentenceIndices.add(eligibleEntries[localIndex].index);
+    });
   }
 
-  // Map to snippets with complete sentence/paragraph highlights and exact styling
+  // Keep AI and similarity annotations independently available when they overlap.
   let plagCounter = 0;
-  return sentences.map((sentence, index) => {
+  return sentences.flatMap((sentence, index) => {
     // Unconditional rule: Table of Contents, Tables, and References are strictly normal text
     if (isExcludedFromHighlighting(sentence)) {
-      return {
+      return [{
         text: sentence,
         type: 'normal' as const,
-      };
+      }];
     }
 
+    const snippets: HighlightedSnippet[] = [];
     if (plagIndices.has(index)) {
       plagCounter++;
       // "mostly red, with some lines appearing blue/underlined, matching the sample reports"
@@ -813,7 +1148,7 @@ export function generateSmartSnippets(
         similarity: clampedPlagScore,
       };
 
-      return {
+      snippets.push({
         text: sentence,
         type: 'plagiarized' as const,
         sourceName: src.name,
@@ -821,20 +1156,20 @@ export function generateSmartSnippets(
         sourceIndex: srcIdx,
         similarityPercentage: src.similarity,
         styleVariant: (isBlue ? 'blue_underlined' : 'red') as 'blue_underlined' | 'red',
-      };
+      });
     }
 
-    if (aiIndices.has(index) && aiScore > 20) {
-      return {
+    if (aiSentenceIndices.has(index) && clampedAiScore > 20) {
+      snippets.push({
         text: sentence,
         type: 'ai_generated' as const,
-        aiProbability: aiScore,
-      };
+        aiProbability: clampedAiScore,
+      });
     }
 
-    return {
+    return snippets.length > 0 ? snippets : [{
       text: sentence,
       type: 'normal' as const,
-    };
+    }];
   });
 }

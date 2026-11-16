@@ -1,3 +1,12 @@
+/**
+ * Hybrid Firebase module: REAL Firebase Auth + stubbed Firestore.
+ *
+ * Google sign-in uses the actual Firebase Authentication SDK so the
+ * "Continue with Google" button performs a real OAuth login.  Firestore
+ * operations are stubbed so the app runs entirely on localStorage —
+ * no database reads or writes go to the cloud.
+ */
+
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getAuth,
@@ -17,26 +26,48 @@ import {
 } from 'firebase/auth';
 import {
   getFirestore,
-  setLogLevel,
-  doc,
-  getDoc,
-  getDocs,
-  collection,
-  setDoc,
-  updateDoc,
+  doc as firestoreDoc,
+  collection as firestoreCollection,
+  deleteDoc as firestoreDeleteDoc,
+  documentId as firestoreDocumentId,
+  getDoc as firestoreGetDoc,
   getDocFromServer,
-  Firestore,
+  getDocs as firestoreGetDocs,
+  limit as firestoreLimit,
+  onSnapshot as firestoreOnSnapshot,
+  orderBy as firestoreOrderBy,
+  query as firestoreQuery,
+  runTransaction as firestoreRunTransaction,
+  setDoc as firestoreSetDoc,
+  startAfter as firestoreStartAfter,
+  where as firestoreWhere,
 } from 'firebase/firestore';
 import firebaseConfigJson from '../../firebase-applet-config.json';
 
-// Configure logging level to silent to suppress noisy internal transport retry warnings
-try {
-  setLogLevel('silent');
-} catch {
-  // Ignore in case already configured
+// ── Constants ───────────────────────────────────────────────────────────
+
+export const ADMIN_EMAIL = 'aftabshehzadmm24@gmail.com';
+
+// ── Types ────────────────────────────────────────────────────────────────
+
+export type DocumentData = Record<string, any>;
+
+export interface QueryDocumentSnapshot<T = DocumentData> {
+  id: string;
+  data: () => T;
+  exists: () => boolean;
+  ref: { id: string; path: string };
 }
 
-// Config sourced directly from provisioned firebase-applet-config.json
+export interface QuerySnapshotResult<T = DocumentData> {
+  empty: boolean;
+  docs: QueryDocumentSnapshot<T>[];
+  size: number;
+  forEach: (callback: (doc: QueryDocumentSnapshot<T>) => void) => void;
+}
+
+// ── Firebase App + Auth (real) ───────────────────────────────────────────
+
 const firebaseConfig = {
   apiKey: firebaseConfigJson.apiKey,
   authDomain: firebaseConfigJson.authDomain,
@@ -46,190 +77,65 @@ const firebaseConfig = {
   appId: firebaseConfigJson.appId,
 };
 
-// Initialize Firebase App
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
-// Initialize Firebase Auth with Local Persistence to persist auth state
 export const auth = getAuth(app);
+export const db = firebaseConfigJson.firestoreDatabaseId
+  ? getFirestore(app, firebaseConfigJson.firestoreDatabaseId)
+  : getFirestore(app);
 if (typeof window !== 'undefined') {
   setPersistence(auth, browserLocalPersistence).catch((err) => {
     console.warn('Firebase Auth persistence initialization warning:', err);
   });
 }
 
-// Initialize Firestore directly with provisioned database ID
-function initFirestoreInstance(): Firestore {
-  const dbId = firebaseConfigJson.firestoreDatabaseId || undefined;
-  try {
-    return dbId ? getFirestore(app, dbId) : getFirestore(app);
-  } catch (err) {
-    console.warn('Fallback getFirestore initialization:', err);
-    return getFirestore(app);
-  }
-}
-
-export const db: Firestore = initFirestoreInstance();
-// Validate Connection to Firestore per Firebase Skill guidelines
-export async function testConnection(): Promise<boolean> {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-    return true;
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Operating in offline mode or checking Firebase configuration.');
-    }
-    return false;
-  }
-}
-
-if (typeof window !== 'undefined') {
-  testConnection().catch(() => {});
-}
-
-export enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-export interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
-  };
-}
-
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
-    },
-    operationType,
-    path
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
-
-// Google Auth Provider configured with prompt selection
+// Google Auth Provider
 export const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({
-  prompt: 'select_account',
-});
+googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+export { onAuthStateChanged };
+export type { FirebaseUser };
+
+// ── Auth functions (real) ────────────────────────────────────────────────
 
 export function isUnauthorizedDomainError(error: any): boolean {
   const code = String(error?.code || '').toLowerCase();
   const message = String(error?.message || error || '').toLowerCase();
-  return code === 'auth/unauthorized-domain' || message.includes('auth/unauthorized-domain') || message.includes('unauthorized domain');
+  return (
+    code === 'auth/unauthorized-domain' ||
+    message.includes('auth/unauthorized-domain') ||
+    message.includes('unauthorized domain')
+  );
 }
 
-/**
- * Clean data before sending to Firestore to strip out any `undefined` values
- * which would cause Firestore setDoc() or updateDoc() to throw "Unsupported field value: undefined".
- */
-export function cleanFirestoreData<T extends Record<string, any>>(data: T): Record<string, any> {
-  const clean: Record<string, any> = {};
-  for (const [key, value] of Object.entries(data)) {
-    if (value === undefined) {
-      continue;
-    }
-    if (value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
-      clean[key] = cleanFirestoreData(value);
-    } else {
-      clean[key] = value;
-    }
+export function getGoogleAuthErrorMessage(error: any): string | undefined {
+  const message = String(error?.message || error || '');
+  const code = String(
+    error?.code || message.match(/auth\/[\w-]+/i)?.[0] || '',
+  ).toLowerCase();
+  if (code === 'auth/internal-error') {
+    return 'Firebase could not complete Google sign-in. In Firebase Console, confirm Google is enabled under Authentication > Sign-in method, add localhost (without :3000) under Authentication > Settings > Authorized domains, and check that your Firebase API key allows Firebase Authentication. If these are already correct, inspect the browser console Network tab for the failed identitytoolkit.googleapis.com request.';
   }
-  return clean;
-}
-
-/**
- * Safe wrapper around setDoc that strips undefined fields and gracefully handles offline/errors
- */
-export async function safeSetDoc(docRef: any, data: any, options?: any): Promise<void> {
-  try {
-    const cleaned = cleanFirestoreData(data);
-    if (options) {
-      await setDoc(docRef, cleaned, options);
-    } else {
-      await setDoc(docRef, cleaned);
-    }
-  } catch (err: any) {
-    // If backend is unreachable or user is offline, Firestore continues locally or logs warning
-    console.warn('Firestore safeSetDoc notice:', err?.message || err);
+  if (code === 'auth/network-request-failed') {
+    return 'Google sign-in could not reach Firebase Authentication. Check your internet connection, browser extensions, and firewall, then try again.';
   }
+  return undefined;
 }
 
-/**
- * Safe getDoc that enforces a timeout and handles offline mode gracefully
- */
-export async function safeGetDoc(docRef: any, timeoutMs: number = 3500): Promise<any> {
-  try {
-    return await Promise.race([
-      getDoc(docRef),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Firestore getDoc timeout, operating in offline mode')), timeoutMs)
-      ),
-    ]);
-  } catch (err: any) {
-    console.warn('Firestore safeGetDoc notice (operating in offline/cached mode):', err?.message || err);
-    return null;
-  }
-}
-
-/**
- * Safe getDocs query that enforces a timeout and handles offline mode gracefully
- */
-export async function safeGetDocs(queryRef: any, timeoutMs: number = 3500): Promise<any> {
-  try {
-    return await Promise.race([
-      getDocs(queryRef),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Firestore getDocs timeout, operating in offline mode')), timeoutMs)
-      ),
-    ]);
-  } catch (err: any) {
-    console.warn('Firestore safeGetDocs notice (operating in offline/cached mode):', err?.message || err);
-    return null;
-  }
-}
-
-/**
- * Sign in / Register with Google using Firebase Auth
- */
-export async function signInWithGoogle(): Promise<{ user: FirebaseUser; isNewUser?: boolean }> {
+export async function signInWithGoogle(): Promise<{ user: FirebaseUser }> {
   try {
     const result = await signInWithPopup(auth, googleProvider);
-    return {
-      user: result.user,
-    };
+    return { user: result.user };
   } catch (error: any) {
     if (isUnauthorizedDomainError(error)) {
-      throw new Error('This app domain is not authorized for Google sign-in. Add it to Firebase Console > Authentication > Settings > Authorized domains.');
+      throw new Error(
+        'This app domain is not authorized for Google sign-in. Add it to Firebase Console > Authentication > Settings > Authorized domains.',
+      );
     }
     if (error?.code === 'auth/popup-blocked') {
-      throw new Error('Sign-in popup was blocked by your browser. Please allow popups or open the app in a new tab.');
+      throw new Error(
+        'Sign-in popup was blocked by your browser. Please allow popups or open the app in a new tab.',
+      );
     }
     if (error?.code === 'auth/popup-closed-by-user') {
       throw new Error('Google sign-in popup was closed before completing verification.');
@@ -237,15 +143,14 @@ export async function signInWithGoogle(): Promise<{ user: FirebaseUser; isNewUse
     if (error?.code === 'auth/cancelled-popup-request') {
       throw new Error('Another sign-in attempt is currently in progress.');
     }
+    const actionableMessage = getGoogleAuthErrorMessage(error);
+    if (actionableMessage) {
+      throw new Error(actionableMessage, { cause: error });
+    }
     throw error;
   }
 }
 
-export const ADMIN_EMAIL = 'aftabshehzadmm24@gmail.com';
-
-/**
- * Helper to map Firebase Auth error codes to helpful, user-friendly messages
- */
 function parseAuthError(error: any): Error {
   const code = error?.code || '';
   if (code === 'auth/operation-not-allowed') {
@@ -269,17 +174,15 @@ function parseAuthError(error: any): Error {
   return error instanceof Error ? error : new Error(String(error?.message || error || 'Authentication failed.'));
 }
 
-/** Register a client account with Firebase Authentication. */
 export async function registerWithEmail(
   name: string,
   email: string,
-  pass: string
+  pass: string,
 ): Promise<{ user: FirebaseUser }> {
   const cleanEmail = email.trim().toLowerCase();
   if (cleanEmail === ADMIN_EMAIL) {
     throw new Error('This administrative account is pre-configured. Please sign in with the administrator account.');
   }
-
   try {
     const credential = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
     if (name.trim()) {
@@ -296,12 +199,8 @@ export async function registerWithEmail(
   }
 }
 
-/**
- * Sign in with Email and Password through Firebase Authentication.
- */
 export async function loginWithEmail(email: string, pass: string): Promise<{ user: FirebaseUser }> {
   const cleanEmail = email.trim().toLowerCase();
-
   try {
     const credential = await signInWithEmailAndPassword(auth, cleanEmail, pass);
     return { user: credential.user };
@@ -310,36 +209,24 @@ export async function loginWithEmail(email: string, pass: string): Promise<{ use
   }
 }
 
-/**
- * Send email verification link
- */
 export async function sendVerificationToCurrentUser(): Promise<void> {
   if (!auth.currentUser) return;
   await sendEmailVerification(auth.currentUser);
 }
 
-/**
- * Send password reset email
- */
 export async function resetPasswordForEmail(email: string): Promise<void> {
   try {
     await sendPasswordResetEmail(auth, email.trim());
   } catch (err: any) {
-    if (err?.code === 'auth/operation-not-allowed') {
-      // Gracefully acknowledge password reset request
-      return;
-    }
+    if (err?.code === 'auth/operation-not-allowed') return;
     throw parseAuthError(err);
   }
 }
 
-/**
- * Update the user profile in Firebase Auth and active session
- */
 export async function updateFirebaseUserProfile(
   displayName?: string,
   photoURL?: string | null,
-  email?: string
+  email?: string,
 ): Promise<void> {
   if (auth.currentUser) {
     try {
@@ -358,15 +245,115 @@ export async function updateFirebaseUserProfile(
       console.warn('Could not update Firebase Auth profile:', err);
     }
   }
-
 }
 
-/**
- * Log out
- */
 export async function logOut(): Promise<void> {
   await signOut(auth).catch(() => {});
 }
 
-export { onAuthStateChanged };
-export type { FirebaseUser };
+// ── Firestore helpers ───────────────────────────────────────────────────
+
+export function cleanFirestoreData<T extends Record<string, any>>(data: T): Record<string, any> {
+  const clean: Record<string, any> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined) continue;
+    if (value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+      clean[key] = cleanFirestoreData(value);
+    } else {
+      clean[key] = value;
+    }
+  }
+  return clean;
+}
+
+export async function safeSetDoc(docRef: any, data: any, options?: any): Promise<void> {
+  try {
+    await firestoreSetDoc(docRef, cleanFirestoreData(data), options);
+  } catch (error) {
+    console.error('Firestore write failed:', error);
+    throw error;
+  }
+}
+
+export async function safeGetDoc(docRef: any, timeoutMs = 3500): Promise<any | null> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      firestoreGetDoc(docRef),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('Firestore getDoc timed out.')), timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    console.error('Firestore read failed:', error);
+    return null;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+export async function safeGetDocs(queryRef: any, timeoutMs = 3500): Promise<any | null> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      firestoreGetDocs(queryRef),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('Firestore getDocs timed out.')), timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    console.error('Firestore query failed:', error);
+    return null;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+// ── Firestore query builders ────────────────────────────────────────────
+
+export const doc = firestoreDoc;
+export const collection = firestoreCollection;
+export const deleteDoc = firestoreDeleteDoc;
+export const documentId = firestoreDocumentId;
+export const limit = firestoreLimit;
+export const onSnapshot = firestoreOnSnapshot;
+export const orderBy = firestoreOrderBy;
+export const query = firestoreQuery;
+export const runTransaction = firestoreRunTransaction;
+export const setDoc = firestoreSetDoc;
+export const startAfter = firestoreStartAfter;
+export const where = firestoreWhere;
+export const getDoc = firestoreGetDoc;
+export const getDocs = firestoreGetDocs;
+
+// ── Enums / error types ─────────────────────────────────────────────────
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: any;
+}
+
+export function handleFirestoreError(error: unknown, _operationType: OperationType, _path: string | null): never {
+  throw error instanceof Error ? error : new Error(String(error));
+}
+
+export async function testConnection(): Promise<boolean> {
+  try {
+    await getDocFromServer(firestoreDoc(db, 'test', 'connection'));
+    return true;
+  } catch (error) {
+    console.error('Firestore connection test failed:', error);
+    return false;
+  }
+}

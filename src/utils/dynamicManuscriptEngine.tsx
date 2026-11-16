@@ -12,12 +12,18 @@ import {
   isTableHeadingOrCaption,
   isTableRowOrData,
   isTableText,
+  isFigureOrGraphText,
+  isMainHeadingText,
+  isGlossaryOrTermTableText,
   isQuoteText,
   isBibliographyHeading,
   isCitationLine,
   isBibliographyOrReferenceText,
   isExcludedFromHighlighting,
   clampSimilarityScore,
+  countWords,
+  selectIndicesForWordShare,
+  splitIntoSentences,
 } from './documentParser';
 import { getInstitutionName } from './institutionName';
 
@@ -44,100 +50,363 @@ export interface ManuscriptPageData {
 
 /**
  * Generates realistic, domain-tailored matched sources for any uploaded document.
- * Strictly clamps total plagiarism similarity within 1% to 12% (never exceeding 12%).
+ * Internet/publication counts follow the report's similarity band (1%–40%).
  */
+
+// Publication database sources shown when the similarity score exceeds 8%.
+const PUBLICATION_SOURCES = [
+  { name: 'Elsevier ScienceDirect', url: 'https://www.sciencedirect.com', type: 'publication' as const },
+  { name: 'Springer Nature', url: 'https://www.springernature.com', type: 'publication' as const },
+  { name: 'Wiley Online Library', url: 'https://onlinelibrary.wiley.com', type: 'publication' as const },
+  { name: 'SAGE Journals', url: 'https://journals.sagepub.com', type: 'publication' as const },
+  { name: 'Oxford Academic', url: 'https://academic.oup.com', type: 'publication' as const },
+  { name: 'Cambridge Core', url: 'https://www.cambridge.org/core', type: 'publication' as const },
+  { name: 'IEEE Xplore', url: 'https://ieeexplore.ieee.org', type: 'publication' as const },
+  { name: 'ACM Digital Library', url: 'https://dl.acm.org', type: 'publication' as const },
+  { name: 'PLOS ONE', url: 'https://journals.plos.org/plosone', type: 'publication' as const },
+  { name: 'Emerald Insight', url: 'https://www.emerald.com', type: 'publication' as const },
+  { name: 'JSTOR', url: 'https://www.jstor.org', type: 'publication' as const },
+  { name: 'Routledge', url: 'https://www.routledge.com', type: 'publication' as const },
+  { name: 'Palgrave Macmillan', url: 'https://www.palgrave.com', type: 'publication' as const },
+  { name: 'IGI Global', url: 'https://www.igi-global.com', type: 'publication' as const },
+  { name: 'Nova Science Publishers', url: 'https://novapublishers.com', type: 'publication' as const },
+  { name: 'American Psychological Association', url: 'https://www.apa.org', type: 'publication' as const },
+  { name: 'BMJ Publishing Group', url: 'https://www.bmj.com', type: 'publication' as const },
+  { name: 'The Lancet', url: 'https://www.thelancet.com', type: 'publication' as const },
+  { name: 'New England Journal of Medicine', url: 'https://www.nejm.org', type: 'publication' as const },
+  { name: 'Annual Reviews', url: 'https://www.annualreviews.org', type: 'publication' as const },
+  { name: 'De Gruyter', url: 'https://www.degruyter.com', type: 'publication' as const },
+  { name: 'Brill', url: 'https://brill.com', type: 'publication' as const },
+  { name: 'World Scientific', url: 'https://www.worldscientific.com', type: 'publication' as const },
+  { name: 'CABI Digital Library', url: 'https://www.cabi.org', type: 'publication' as const },
+  { name: 'Harvard University Press', url: 'https://www.hup.harvard.edu', type: 'publication' as const },
+  { name: 'MIT Press Direct', url: 'https://direct.mit.edu', type: 'publication' as const },
+];
+
+// 216 authentic internet domains used by Turnitin's internet database.
+const INTERNET_SOURCE_DOMAINS = [
+  'www.scribd.com',
+  'digitalcommons.liberty.edu',
+  'www.transtutors.com',
+  'reference-global.com',
+  'dn721700.ca.archive.org',
+  'www.coursehero.com',
+  'www.tandfonline.com',
+  'www.easij.com',
+  'dn760107.eu.archive.org',
+  'journals.plos.org',
+  'idvyorynw6xy.compat.objectstorage.us-ashburn-1.oraclecloud.com',
+  'dn721605.ca.archive.org',
+  'scholarpublishing.org',
+  'ecsenet.com',
+  'discovery.ucl.ac.uk',
+  'ia801509.us.archive.org',
+  'tesr.journals.ekb.eg',
+  'www.ebsco.com',
+  'www.longdom.org',
+  'dn760001.eu.archive.org',
+  'www.studocu.com',
+  'www.glowm.com',
+  'www.columbia.edu',
+  'lomalindafertility.com',
+  'archive.org',
+  'www.youtube.com',
+  'www.pearson.com',
+  'en.wikipedia.org',
+  'in.pinterest.com',
+  'link.springer.com',
+  'www.acog.org',
+  'www.merckmanuals.com',
+  'teachmeanatomy.info',
+  'www.amboss.com',
+  'dn760108.eu.archive.org',
+  'www.mdpi.com',
+  'www.studentsassignmenthelp.co.uk',
+  'www.cedtech.net',
+  'www.irjms.com',
+  'europepmc.org',
+  'dspace-backend.independentcolleges.ie',
+  'shs.cairn.info',
+  'viableinsights.com',
+  'ulspace.ul.ac.za',
+  'www.examquestionbank.com',
+  'dspace.lib.cranfield.ac.uk',
+  'dn760103.eu.archive.org',
+  'openaccess.nhh.no',
+  'projekter.aau.dk',
+  'jurnal.itscience.org',
+  'scholarworks.waldenu.edu',
+  'repo-dosen.ulm.ac.id',
+  'ap-st01.ext.exlibrisgroup.com',
+  'digitalcommons.pepperdine.edu',
+  'dergipark.org.tr',
+  'iiari.org',
+  'ajan.com.au',
+  'pubmed.ncbi.nlm.nih.gov',
+  'ia601605.us.archive.org',
+  'ro.ecu.edu.au',
+  'orca.cardiff.ac.uk',
+  'soar.usa.edu',
+  'ojs.aut.ac.nz',
+  'www.linkedin.com',
+  'pmc.ncbi.nlm.nih.gov',
+  'www.science.gov',
+  'ejurnal.methodist.ac.id',
+  'www.richtmann.org',
+  'researchportal.hkr.se',
+  'www.inderscience.com',
+  'ijariie.com',
+  'www.ijbs.unimas.my',
+  'wrap.warwick.ac.uk',
+  'www.nature.com',
+  'researchonline.ljmu.ac.uk',
+  'www.flai.it',
+  'corporatejustice.org',
+  'www.perceptions.eu',
+  'eurispes.eu',
+  'www.lavoro.gov.it',
+  'www.frontiersin.org',
+  'i-claim.eu',
+  'www.diplomacyandlaw.com',
+  'www.right-to-education.org',
+  'ams.overcastcdn.com',
+  'tesi.luiss.it',
+  'eea.iom.int',
+  'esthinktank.com',
+  'repository.gchumanrights.org',
+  'www.bib.irb.hr',
+  'ia903201.us.archive.org',
+  'www.opensocietyfoundations.org',
+  'www.mypryme.com',
+  'iris.unipa.it',
+  'pure.eur.nl',
+  'books.ceapublishing.hu',
+  'unigenius.co.uk',
+  'www.consiglioveneto.it',
+  'dn710208.ca.archive.org',
+  'picum.org',
+  'italy.iom.int',
+  'repozytorium.kozminski.edu.pl',
+  'eerstekamer.nl',
+  'fra.europa.eu',
+  'upr-info.org',
+  'is.muni.cz',
+  'nottingham-repository.worktribe.com',
+  'arab-digital-economy.org',
+  'www.amnesty.org',
+  'www.ghrd.org',
+  'dn710100.ca.archive.org',
+  'www.lucisullavoro-dplonline.it',
+  'ia600502.us.archive.org',
+  'oa.inapp.gov.it',
+  'dn711603.ca.archive.org',
+  'univendspace.univen.ac.za',
+  'www.sralab.org',
+  'dn721709.ca.archive.org',
+  'dspace.alquds.edu',
+  'dn721801.ca.archive.org',
+  'ntnuopen.ntnu.no',
+  'www.blueprint.ai',
+  'biccproceedings.org',
+  'www.ohsu.edu',
+  'dn721906.ca.archive.org',
+  'researchspace.ukzn.ac.za',
+  'www.nhsconfed.org',
+  'pacfa.org.au',
+  'www.icanotes.com',
+  'pacja.org.au',
+  'dar-al-shifaa.com',
+  'dn790008.ca.archive.org',
+  'dn721504.ca.archive.org',
+  'www.sabiscareers.com',
+  'ore.eu',
+  'stats.oarc.ucla.edu',
+  'dn760009.eu.archive.org',
+  'www.fecos.nfkatzke.com',
+  'exploration.stat.illinois.edu',
+  'encord.com',
+  'ourarchive.otago.ac.nz',
+  'zealjournals.com',
+  'ijebmr.com',
+  'www.jriiejournal.com',
+  'ir.jkuat.ac.ke',
+  'distantreader.org',
+  'pusdikra-publishing.com',
+  'hh.diva-portal.org',
+  'e-research.siam.edu',
+  'etd.uum.edu.my',
+  'econjournals.com',
+  'eprints.usm.my',
+  'repository.tml.nul.ls',
+  'ijsab.com',
+  'ukzn-dspace.ukzn.ac.za',
+  'dn760106.eu.archive.org',
+  'mc-caddogap.com',
+  'aaltodoc.aalto.fi',
+  'escholar.buse.ac.zw',
+  'dspace.bu.ac.th',
+  'www.nepjol.info',
+  'www.allmultidisciplinaryjournal.com',
+  'www.eelet.org.uk',
+  'ir-library.ku.ac.ke',
+  'ir.aamusted.edu.gh',
+  'web.esenfc.pt',
+  'dn760004.eu.archive.org',
+  'su-plus.strathmore.edu',
+  'www.managementpaper.net',
+  'scholars.direct',
+  'norma.ncirl.ie',
+  'mbse.journals.ekb.eg',
+  'ir.kiu.ac.ug',
+  'www.researchgate.net',
+  'ojs.unikom.ac.id',
+  'www.crumplab.com',
+  'thesis.unipd.it',
+  'arrow.tudublin.ie',
+  'yorkspace.library.yorku.ca',
+  'essay.utwente.nl',
+  'dn760105.eu.archive.org',
+  'pubs.sciepub.com',
+  'ia800100.us.archive.org',
+  'core.ac.uk',
+  'rafavsbastos.quarto.pub',
+  'dspace.bracu.ac.bd',
+  'www.refaad.com',
+  'www.elsevier.es',
+  'www.ajrsp.com',
+  'docs.neu.edu.tr',
+  't1t.net',
+  'www.cemnet.com',
+  'pdfs.semanticscholar.org',
+  'dn721204.ca.archive.org',
+  'digikogu.taltech.ee',
+  'www.wsj.com',
+  'file-thesis.pide.org.pk',
+  'www.investing.com',
+  'esj.eastasouth-institute.com',
+  'journal.uir.ac.id',
+  'cc.gov.pk',
+  'dn760003.eu.archive.org',
+  'www.golimelight.com',
+  'dn720002.ca.archive.org',
+  'www.speedbooks.co.uk',
+  'era.ed.ac.uk',
+  'www.exchange.jo',
+  'www.gapinterdisciplinarities.org',
+  'www.sciencepublishinggroup.com',
+  'd9-wret.s3.us-west-2.amazonaws.com',
+  'vtechworks.lib.vt.edu',
+  'www.alphagenpro.com',
+  'argaamplus.s3.amazonaws.com',
+  'zmzm.sa',
+  'www.ias.ac.in',
+  'dn720005.ca.archive.org',
+];
+
+const DOMAIN_INTERNET_SOURCES = INTERNET_SOURCE_DOMAINS.map(domain => ({
+  name: domain,
+  url: `https://${domain}`,
+  type: 'internet' as const,
+}));
+
+/**
+ * Deterministically shuffles an array based on an integer seed.
+ */
+function seededShuffle<T>(arr: T[], seed: number): T[] {
+  const result = [...arr];
+  let s = Math.abs(seed) || 1;
+  for (let i = result.length - 1; i > 0; i--) {
+    s = (s * 9301 + 49297) % 233280;
+    const j = Math.floor((s / 233280) * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+/**
+ * Internet source count for a similarity band:
+ * 1–4% → 3, 5–10% → 8, 11–20% → 13, 21–40% → 19.
+ */
+function getInternetSourceCount(score: number): number {
+  if (score <= 4) return 3;
+  if (score <= 10) return 8;
+  if (score <= 20) return 13;
+  return 19;
+}
+
+/**
+ * Publication count for a similarity band:
+ * ≤8% → 0, 9–20% → 1, 21–40% → 2.
+ */
+function getPublicationCount(score: number): number {
+  if (score <= 8) return 0;
+  if (score <= 20) return 1;
+  return 2;
+}
+
 export function generateSourcesForDocument(
   fileName: string,
   title: string,
   plagiarismScore: number
 ): MatchedSource[] {
-  const cleanTitle = (title || fileName || '').toLowerCase();
   const clampedPlag = clampSimilarityScore(plagiarismScore);
-
-  let domainSources: Array<{ name: string; url: string; type: 'internet' | 'publication' | 'student_paper' }> = [];
-
-  if (cleanTitle.includes('risk') || cleanTitle.includes('cyber') || cleanTitle.includes('security') || cleanTitle.includes('cyb')) {
-    domainSources = [
-      { name: 'Computer security - Wikipedia', url: 'https://en.wikipedia.org/wiki/Computer_security', type: 'internet' },
-      { name: 'WannaCry ransomware attack - Wikipedia', url: 'https://en.wikipedia.org/wiki/WannaCry_ransomware_attack', type: 'internet' },
-      { name: 'NIST SP 800-30 Rev 1: Guide for Conducting Risk Assessments', url: 'https://csrc.nist.gov/publications/detail/sp/800-30/rev-1/final', type: 'publication' },
-      { name: 'IEEE Transactions on Dependable and Secure Computing', url: 'https://ieeexplore.ieee.org/xpl/RecentIssue.jsp?punumber=8858', type: 'publication' },
-      { name: 'Submitted to University of Technology, Sydney', url: 'https://uts.edu.au/student-repository/archive', type: 'student_paper' },
-      { name: 'SANS Institute InfoSec Reading Room', url: 'https://sans.org/white-papers/risk-management', type: 'internet' },
-    ];
-  } else if (cleanTitle.includes('clinic') || cleanTitle.includes('health') || cleanTitle.includes('medic') || cleanTitle.includes('diagnost')) {
-    domainSources = [
-      { name: 'The Lancet Digital Health: Machine Learning in Clinical Care', url: 'https://thelancet.com/journals/landig/article/PIIS2589-7500(23)00112-X', type: 'publication' },
-      { name: 'Nature Medicine - Clinical Predictive Diagnostics', url: 'https://nature.com/articles/s41591-023-02482-1', type: 'publication' },
-      { name: 'NCBI PMC National Library of Medicine', url: 'https://ncbi.nlm.nih.gov/pmc/articles/PMC8901234', type: 'internet' },
-      { name: 'Submitted to Johns Hopkins University', url: 'https://jhu.edu/scholarworks/student-papers', type: 'student_paper' },
-      { name: 'BioMed Central Medical Informatics and Decision Making', url: 'https://bmcmedinformdecismak.biomedcentral.com', type: 'publication' },
-    ];
-  } else if (cleanTitle.includes('learn') || cleanTitle.includes('ai') || cleanTitle.includes('neural') || cleanTitle.includes('comput')) {
-    domainSources = [
-      { name: 'arXiv.org - Computer Science: Artificial Intelligence', url: 'https://arxiv.org/abs/2304.09871', type: 'internet' },
-      { name: 'IEEE Transactions on Pattern Analysis and Machine Intelligence', url: 'https://ieeexplore.ieee.org/document/945281', type: 'publication' },
-      { name: 'ScienceDirect / Elsevier Cognitive Computation Archive', url: 'https://sciencedirect.com/science/article/pii/S18770509210087', type: 'publication' },
-      { name: 'Submitted to Stanford University', url: 'https://stanford.edu/academics/repository/cs229', type: 'student_paper' },
-      { name: 'Journal of Artificial Intelligence Research (JAIR)', url: 'https://jair.org/index.php/jair/article/view/11890', type: 'publication' },
-    ];
-  } else if (cleanTitle.includes('econ') || cleanTitle.includes('financ') || cleanTitle.includes('market') || cleanTitle.includes('trade')) {
-    domainSources = [
-      { name: 'Journal of Financial Economics (Elsevier)', url: 'https://sciencedirect.com/journal/journal-of-financial-economics', type: 'publication' },
-      { name: 'NBER Working Paper Series - Macroeconomics & Quantitative Finance', url: 'https://nber.org/papers/w29810', type: 'publication' },
-      { name: 'Federal Reserve Bank Economic Research Repository', url: 'https://federalreserve.gov/econres/feds/2023.htm', type: 'internet' },
-      { name: 'Submitted to London School of Economics', url: 'https://lse.ac.uk/library/repository', type: 'student_paper' },
-      { name: 'The American Economic Review', url: 'https://aeaweb.org/articles?id=10.1257/aer.20210982', type: 'publication' },
-    ];
-  } else {
-    domainSources = [
-      { name: 'ScienceDirect / Elsevier Academic Archive', url: 'https://sciencedirect.com/science/article/pii', type: 'publication' },
-      { name: 'Harvard University Scholar Repository', url: 'https://harvard.edu/dash/handle/291', type: 'student_paper' },
-      { name: 'Springer Nature Academic Publications', url: 'https://link.springer.com/chapter/10.1007/978-3-030', type: 'publication' },
-      { name: 'Wikipedia - Academic Research & Empirical Methodology', url: 'https://en.wikipedia.org/wiki/Empirical_research', type: 'internet' },
-      { name: 'Submitted to University of California, Berkeley', url: 'https://escholarship.org/uc/item/7pk8r91', type: 'student_paper' },
-      { name: 'JSTOR Digital Archival Library', url: 'https://jstor.org/stable/2578912', type: 'publication' },
-    ];
-  }
-
   if (clampedPlag <= 0) {
     return [];
   }
 
-  // Distribute the clampedPlag (1% to 12%) proportionally across the sources
-  const count = Math.min(domainSources.length, Math.max(2, Math.min(4, Math.ceil(clampedPlag / 3.5))));
-  const selected = domainSources.slice(0, count);
+  // Derive a fresh seed from the title / fileName and current timestamp so every
+  // scan picks a different random subset of the 216 domains.
+  const inputStr = `${fileName}_${title}_${Date.now()}`;
+  let hash = 0;
+  for (let i = 0; i < inputStr.length; i++) {
+    hash = (hash << 5) - hash + inputStr.charCodeAt(i);
+    hash |= 0;
+  }
+  const seed = Math.abs(hash) + Math.floor(Math.random() * 10000);
 
-  // Weights for decreasing distribution (e.g. 60%, 25%, 15%)
-  const rawWeights = [0.58, 0.28, 0.14, 0.08].slice(0, count);
-  const weightSum = rawWeights.reduce((a, b) => a + b, 0);
+  const internetCount = getInternetSourceCount(clampedPlag);
+  const publicationCount = getPublicationCount(clampedPlag);
 
-  let remaining = clampedPlag;
-  return selected.map((s, idx) => {
-    let sim: number;
-    if (idx === count - 1) {
-      sim = Math.max(idx === 0 ? 1 : 0, remaining);
-    } else {
-      const normalizedWeight = rawWeights[idx] / weightSum;
-      sim = Math.max(1, Math.round(clampedPlag * normalizedWeight));
-      if (sim > remaining) sim = remaining;
-      remaining -= sim;
+  const chosenInternet = seededShuffle(DOMAIN_INTERNET_SOURCES, seed + 101).slice(0, internetCount);
+  const chosenPublications = seededShuffle(PUBLICATION_SOURCES, seed + 211).slice(0, publicationCount);
+
+  // Internet sources first, then publications. Every listed source contributes at
+  // least 1%, and any remaining similarity is spread with a decaying weight so the
+  // top sources carry the largest share (overlapping matches may sum above the index).
+  const chosen = [...chosenInternet, ...chosenPublications];
+  const weights = chosen.map((_, index) => 1 / Math.pow(index + 1, 1.15));
+  const weightSum = weights.reduce((a, b) => a + b, 0);
+  const similarities = chosen.map(() => 1);
+
+  const extra = clampedPlag - chosen.length;
+  if (extra > 0) {
+    let assigned = 0;
+    for (let i = 0; i < chosen.length; i++) {
+      const add = Math.floor((extra * weights[i]) / weightSum);
+      similarities[i] += add;
+      assigned += add;
     }
+    let remainder = clampedPlag - chosen.length - assigned;
+    for (let i = 0; remainder > 0; i++, remainder--) {
+      similarities[i % chosen.length] += 1;
+    }
+  }
 
-    return {
-      id: `src-${idx + 1}`,
-      name: s.name,
-      url: s.url,
-      similarity: sim,
-      type: s.type,
-    };
-  });
+  return chosen
+    .map((source, index) => ({
+      name: source.name,
+      url: source.url,
+      similarity: similarities[index],
+      type: source.type,
+    }))
+    .sort((a, b) => b.similarity - a.similarity)
+    .map((source, index) => ({ id: `src-${index + 1}`, ...source }));
 }
 
 /**
  * Paginates text cleanly into academic manuscript pages for an inserted document.
  * Strictly obeys:
- * - Plagiarism Similarity 1%–12% clamp.
+ * - Plagiarism Similarity 1%–40% clamp.
  * - Exclude Quotes: Table of Contents & Quotes are excluded from plagiarism highlighting.
  * - Exclude Bibliography: References & Bibliography sections are excluded from plagiarism highlighting.
  */
@@ -192,17 +461,29 @@ export function paginateDocumentForTurnitin(
   const paragraphsPerPage = Math.max(2, Math.ceil(rawParagraphs.length / targetManuscriptPages));
 
   const plagScore = Math.max(1, clampSimilarityScore(report.plagiarismScore));
-  const aiScore = report.aiScore || 0;
+  const aiScore = Number.isFinite(report.aiScore)
+    ? Math.min(100, Math.max(0, report.aiScore))
+    : 0;
 
   // Track sentence index for consistent highlight assignment
-  const sentenceList: { text: string; paraIdx: number; isToc: boolean; isQuote: boolean; isBib: boolean; isTable: boolean }[] = [];
+  const sentenceList: {
+    text: string;
+    paraIdx: number;
+    isToc: boolean;
+    isQuote: boolean;
+    isBib: boolean;
+    isTable: boolean;
+    isFigure: boolean;
+    isHeading: boolean;
+  }[] = [];
   let inBibSection = false;
   let inTocSection = false;
   let inTableBlock = false;
+  let inFigureBlock = false;
 
   const splitParagraphs = rawParagraphs.map((paraText, pIdx) => {
     const trimmedPara = paraText.trim();
-    // Check if paragraph is bibliography, TOC, or Table
+    // Check if paragraph is bibliography, TOC, Table, Figure, or Heading
     if (isBibliographyHeading(trimmedPara) || isBibliographyOrReferenceText(trimmedPara)) {
       inBibSection = true;
     }
@@ -220,16 +501,33 @@ export function paginateDocumentForTurnitin(
 
     if (isTableHeadingOrCaption(trimmedPara) || isTableText(trimmedPara)) {
       inTableBlock = true;
-    } else if (inTableBlock && !trimmedPara.includes('|') && !trimmedPara.includes('\t')) {
+    } else if (
+      inTableBlock &&
+      (isMainHeadingText(trimmedPara) || /^\d+(\.\d+)*\.?\s+[A-Z]/.test(trimmedPara))
+    ) {
       inTableBlock = false;
     }
 
+    if (isFigureOrGraphText(trimmedPara)) {
+      inFigureBlock = true;
+    } else if (
+      inFigureBlock &&
+      (isMainHeadingText(trimmedPara) ||
+        isTableHeadingOrCaption(trimmedPara) ||
+        (trimmedPara.length >= 90 && /[.!?]/.test(trimmedPara)))
+    ) {
+      inFigureBlock = false;
+    }
+
     const isHeading =
+      isMainHeadingText(trimmedPara) ||
       /^[0-9]\.\s|^Abstract:|^Conclusion:|^References:|^References$|^Bibliography|^Figure\s[0-9]/i.test(
         paraText
       );
-    const sentences = paraText.match(/[^.!?]+[.!?]+(\s+|$)|[^.!?]+$/g) || [paraText];
-    const cleanedSentences = sentences.map(s => s.trim()).filter(s => s.length > 5);
+    const sentences = splitIntoSentences(paraText);
+    const cleanedSentences = (sentences.length > 0 ? sentences : [paraText])
+      .map(s => s.trim())
+      .filter(s => s.length > 5);
 
     cleanedSentences.forEach(s => {
       const isBib =
@@ -250,8 +548,24 @@ export function paginateDocumentForTurnitin(
         isTableRowOrData(s) ||
         isTableText(s) ||
         isTableText(paraText);
+      const isFigure =
+        inFigureBlock || isFigureOrGraphText(s) || isFigureOrGraphText(paraText);
+      const isSentenceHeading =
+        isHeading ||
+        isMainHeadingText(s) ||
+        isGlossaryOrTermTableText(s) ||
+        isGlossaryOrTermTableText(paraText);
       const isQuote = isQuoteText(s);
-      sentenceList.push({ text: s, paraIdx: pIdx, isToc, isQuote, isBib, isTable });
+      sentenceList.push({
+        text: s,
+        paraIdx: pIdx,
+        isToc,
+        isQuote,
+        isBib,
+        isTable: isTable || isGlossaryOrTermTableText(s) || isGlossaryOrTermTableText(paraText),
+        isFigure,
+        isHeading: isSentenceHeading,
+      });
     });
 
     return {
@@ -263,15 +577,31 @@ export function paginateDocumentForTurnitin(
 
   const totalSentences = sentenceList.length;
 
-  // Identify eligible candidate sentences for highlighting:
-  // Strictly NEVER highlight Table of Contents, Tables, or References!
-  // Also exclude quotes if excludeQuotes is active.
+  // Identify eligible candidate sentences for highlighting (AI and Similarity):
+  // NEVER highlight TOC, Tables, Images, Graphs/Figures, References, or main headings.
   const eligibleIndices: number[] = [];
   for (let i = 0; i < totalSentences; i++) {
     const item = sentenceList[i];
-    if (item.isToc || item.isTable || item.isBib || isExcludedFromHighlighting(item.text)) continue;
+    if (
+      item.isToc ||
+      item.isTable ||
+      item.isBib ||
+      item.isFigure ||
+      item.isHeading ||
+      isExcludedFromHighlighting(item.text)
+    ) {
+      continue;
+    }
     if (excludeQuotes && item.isQuote) continue;
     eligibleIndices.push(i);
+  }
+
+  const aiHighlightedSentences = new Set<number>();
+  if (!isSimilarity && aiScore > 20 && eligibleIndices.length > 0) {
+    const wordCounts = eligibleIndices.map(index => countWords(sentenceList[index].text));
+    selectIndicesForWordShare(wordCounts, aiScore).forEach(localIndex => {
+      aiHighlightedSentences.add(eligibleIndices[localIndex]);
+    });
   }
 
   const getPercentTarget = (score: number, total: number): number => {
@@ -295,7 +625,7 @@ export function paginateDocumentForTurnitin(
     return Array.from(positions).sort((a, b) => a - b);
   };
 
-  // Decide which complete sentences are highlighted for the clamped 1-12% similarity score.
+  // Decide which complete sentences are highlighted for the clamped 1-40% similarity score.
   const plagTargetCount = plagScore > 0 && eligibleIndices.length > 0
     ? getPercentTarget(plagScore, eligibleIndices.length)
     : 0;
@@ -312,37 +642,29 @@ export function paginateDocumentForTurnitin(
     }
   }
 
-  // Scores up to 20% remain unhighlighted; higher scores target the same share of eligible sentences.
-  let aiTargetCount = 0;
-  if (aiScore > 20) {
-    aiTargetCount = getPercentTarget(aiScore, eligibleIndices.length || totalSentences);
-  }
-
-  const aiSentenceIndices = new Set<number>();
-
-  if (aiTargetCount > 0 && eligibleIndices.length > 0) {
-    const positions = getExactCoveragePositions(eligibleIndices.length, aiTargetCount);
-    for (const pos of positions) {
-      const targetIdx = eligibleIndices[pos];
-      if (!isSimilarity || !plagSentenceIndices.has(targetIdx)) {
-        aiSentenceIndices.add(targetIdx);
-      }
-    }
-  }
-
   // Build formatted paragraphs with segments
   let currentSentenceIndex = 0;
   const formattedParagraphs: FormattedParagraph[] = splitParagraphs.map(sp => {
     const segments: FormattedSegment[] = [];
     const badgesSet = new Set<number>();
+    let paragraphSearchOffset = 0;
 
     sp.sentences.forEach(sText => {
       const sIdx = currentSentenceIndex++;
       const item = sentenceList[sIdx];
-      const isExcluded = item?.isToc || item?.isTable || item?.isBib || isExcludedFromHighlighting(sText) || isExcludedFromHighlighting(sp.rawText);
+      const isExcluded =
+        item?.isToc ||
+        item?.isTable ||
+        item?.isBib ||
+        item?.isFigure ||
+        item?.isHeading ||
+        sp.isHeading ||
+        isExcludedFromHighlighting(sText) ||
+        isExcludedFromHighlighting(sp.rawText);
 
       const plagInfo = !isExcluded ? plagSentenceIndices.get(sIdx) : undefined;
-      const isAi = !isExcluded && aiSentenceIndices.has(sIdx);
+      const sentenceStart = sp.rawText.indexOf(sText, paragraphSearchOffset);
+      if (sentenceStart !== -1) paragraphSearchOffset = sentenceStart + sText.length;
 
       if (isSimilarity && plagInfo) {
         badgesSet.add(plagInfo.sourceIndex);
@@ -351,7 +673,7 @@ export function paginateDocumentForTurnitin(
           isPlagiarized: true,
           sourceIndex: plagInfo.sourceIndex,
         });
-      } else if (!isSimilarity && isAi && aiScore > 20) {
+      } else if (!isSimilarity && !isExcluded && aiScore > 20 && aiHighlightedSentences.has(sIdx)) {
         segments.push({
           text: `${sText} `,
           isAi: true,
@@ -508,7 +830,7 @@ export const DynamicTurnitinManuscriptPage: React.FC<{
                           <span
                             key={`seg-${sIdx}`}
                             style={{ backgroundColor: '#fca5a5', color: '#991b1b' }}
-                            className="rounded-xs px-1 py-0.5 inline font-normal"
+                            className="rounded-xs px-1 inline font-normal"
                           >
                             <span className="inline-flex items-center justify-center w-3 h-3 rounded-full text-[7.5px] font-bold font-mono bg-[#dc2626] text-white mr-1 align-baseline">
                               {srcNum}
@@ -521,7 +843,7 @@ export const DynamicTurnitinManuscriptPage: React.FC<{
                           <span
                             key={`seg-${sIdx}`}
                             style={{ backgroundColor: '#93c5fd', color: '#1e3a8a' }}
-                            className="rounded-xs px-1 py-0.5 inline font-normal"
+                            className="rounded-xs px-1 inline font-normal"
                           >
                             <span className="inline-flex items-center justify-center w-3 h-3 rounded-full text-[7.5px] font-bold font-mono bg-[#2563eb] text-white mr-1 align-baseline">
                               {srcNum}
@@ -534,7 +856,7 @@ export const DynamicTurnitinManuscriptPage: React.FC<{
                           <span
                             key={`seg-${sIdx}`}
                             style={{ backgroundColor: '#86efac', color: '#064e3b' }}
-                            className="rounded-xs px-1 py-0.5 inline font-normal"
+                            className="rounded-xs px-1 inline font-normal"
                           >
                             <span className="inline-flex items-center justify-center w-3 h-3 rounded-full text-[7.5px] font-bold font-mono bg-[#059669] text-white mr-1 align-baseline">
                               {srcNum}
@@ -547,7 +869,7 @@ export const DynamicTurnitinManuscriptPage: React.FC<{
                           <span
                             key={`seg-${sIdx}`}
                             style={{ backgroundColor: '#d8b4fe', color: '#4c1d95' }}
-                            className="rounded-xs px-1 py-0.5 inline font-normal"
+                            className="rounded-xs px-1 inline font-normal"
                           >
                             <span className="inline-flex items-center justify-center w-3 h-3 rounded-full text-[7.5px] font-bold font-mono bg-[#7c3aed] text-white mr-1 align-baseline">
                               {srcNum}
@@ -563,8 +885,8 @@ export const DynamicTurnitinManuscriptPage: React.FC<{
                         <span
                           key={`seg-${sIdx}`}
                           style={{
-                            backgroundColor: '#93c5fd', // prominent light blue highlight for AI detection
-                            color: '#1e3a8a',           // dark blue text
+                            backgroundColor: '#AFEBF0',
+                            color: '#000000',
                           }}
                           className="rounded-xs px-1 py-0.5 inline font-normal"
                         >
