@@ -19,10 +19,27 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
+  const normalizeOrigin = (value: string): string | null => {
+    try {
+      const url = new URL(value);
+      return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
+    } catch {
+      return null;
+    }
+  };
+
   const configuredOrigins = (process.env.FRONTEND_ORIGIN || "")
     .split(",")
     .map(origin => origin.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .flatMap(origin => {
+      const normalized = normalizeOrigin(origin);
+      if (!normalized) {
+        console.warn(`Ignoring invalid FRONTEND_ORIGIN value: ${origin}`);
+        return [];
+      }
+      return [normalized];
+    });
 
   // Always allow the production Vercel frontend and localhost in dev
   const builtInOrigins = [
@@ -31,11 +48,12 @@ async function startServer() {
 
   app.use((req, res, next) => {
     const origin = req.headers.origin;
+    const normalizedOrigin = origin ? normalizeOrigin(origin) : null;
     const isLocalDevelopment = process.env.NODE_ENV !== "production"
-      && (origin === "http://localhost:3000" || origin === "http://127.0.0.1:3000");
+      && (normalizedOrigin === "http://localhost:3000" || normalizedOrigin === "http://127.0.0.1:3000");
     const allAllowed = [...builtInOrigins, ...configuredOrigins];
 
-    if (origin && (allAllowed.includes(origin) || isLocalDevelopment)) {
+    if (origin && normalizedOrigin && (allAllowed.includes(normalizedOrigin) || isLocalDevelopment)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
       res.setHeader("Vary", "Origin");
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
