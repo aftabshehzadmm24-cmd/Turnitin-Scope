@@ -74,7 +74,9 @@ export interface ScanReport {
   reportStyle?: ReportStyle;
   status: 'Completed' | 'Analyzing' | 'Failed';
   plagiarismScore: number; // percentage, e.g. 14
-  aiScore: number; // percentage, e.g. 85
+  aiScore: number; // percentage, e.g. 85 (already display-adjusted)
+  /** True when a genuine 0% AI result should be shown as '*%' (50/50 rule). */
+  aiScoreMasked?: boolean;
   wordCount: number;
   characterCount: number;
   date: string;

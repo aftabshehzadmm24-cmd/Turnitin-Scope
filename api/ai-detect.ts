@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { analyzeTextWithTruthScan } from "../server/aiDetection.ts";
+import { analyzeTextWithAiorNot } from "../server/aiDetection.ts";
 
 export default async function handler(req: Request, res: Response): Promise<void> {
   if (req.method !== "POST") {
@@ -9,7 +9,7 @@ export default async function handler(req: Request, res: Response): Promise<void
   }
 
   const authorization = req.headers.authorization;
-  const result = await analyzeTextWithTruthScan(
+  const result = await analyzeTextWithAiorNot(
     typeof authorization === "string" ? authorization : undefined,
     req.body?.text
   );

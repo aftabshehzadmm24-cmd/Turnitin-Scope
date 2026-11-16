@@ -13,8 +13,8 @@ import { OriginalityCheckLogo } from './components/OriginalityCheckLogo';
 import { ToastNotificationBanner } from './components/ToastNotificationBanner';
 import { CheckCircle2, AlertCircle, Info, Loader2 } from 'lucide-react';
 
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
-const IDLE_WARNING_MS = 60 * 1000;
+const IDLE_TIMEOUT_MS = 60 * 1000;
+const IDLE_WARNING_MS = 10 * 1000;
 const ACTIVITY_STORAGE_PREFIX = 'turnitscope:last-activity:';
 const THEME_STORAGE_KEY = 'turnitscope:theme';
 
@@ -61,7 +61,7 @@ const AppContent: React.FC = () => {
 
     const recordActivity = () => {
       const now = Date.now();
-      if (now - lastActivityWrite >= 10_000) {
+      if (now - lastActivityWrite >= 1_000) {
         lastActivityWrite = now;
         localStorage.setItem(activityStorageKey, String(now));
       }
@@ -104,7 +104,7 @@ const AppContent: React.FC = () => {
     activityEvents.forEach(eventName => window.addEventListener(eventName, recordActivity, { passive: true }));
     window.addEventListener('storage', handleStorage);
     document.addEventListener('visibilitychange', recordActivity);
-    const timer = window.setInterval(checkIdleTime, 5_000);
+    const timer = window.setInterval(checkIdleTime, 1_000);
 
     return () => {
       window.clearInterval(timer);
@@ -164,7 +164,7 @@ const AppContent: React.FC = () => {
           role="alert"
           aria-live="assertive"
         >
-          <span className="text-xs font-semibold">You’ll be signed out in about one minute due to inactivity.</span>
+          <span className="text-xs font-semibold">You’ll be signed out in about 10 seconds due to inactivity.</span>
           <button
             type="button"
             onClick={() => {

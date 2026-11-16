@@ -3,6 +3,7 @@ import { ScanReport, MatchedSource, HighlightedSnippet } from '../types';
 import { useApp } from '../context/AppContext';
 import { OriginalityCheckLogo } from './OriginalityCheckLogo';
 import { cleanText, MAX_SIMILARITY_SCORE } from '../utils/documentParser';
+import { formatAiScoreDisplay } from '../utils/aiScore';
 import { downloadReportPdf, formatTurnitinSubmissionId } from '../utils/pdfGenerator';
 import { TurnitinOfficialMultiPageReport } from './TurnitinOfficialMultiPageReport';
 import { ClassicReport } from './ClassicReport';
@@ -80,8 +81,8 @@ export const ReportModal: React.FC<ReportModalProps> = ({ report, onClose }) => 
   const submissionId = formatTurnitinSubmissionId(report.submissionId);
 
   // Format AI score display: 1% to 20% shows *%, >20% shows exact %, 0% shows 0%
-  const isAiUnderThreshold = report.aiScore > 0 && report.aiScore <= 20;
-  const aiScoreDisplay = isAiUnderThreshold ? '*%' : (report.aiScore > 20 ? `${report.aiScore}%` : '0%');
+  // (or *% for the 50% of genuine 0% results marked as masked).
+  const aiScoreDisplay = formatAiScoreDisplay(report.aiScore, Boolean(report.aiScoreMasked));
 
   // Default sources if none are present (0–40% similarity breakdown)
   const sources: MatchedSource[] = report.sources && report.sources.length > 0 ? report.sources : [

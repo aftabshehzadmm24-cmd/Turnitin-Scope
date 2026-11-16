@@ -3,6 +3,7 @@ import { BlendMode, PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
 import { MatchedSource, ScanReport } from '../types';
 import { clampSimilarityScore } from './documentParser';
+import { formatAiScoreDisplay } from './aiScore';
 import { getReportPageLayout, getReportPdfFileName } from './reportPageLayout';
 import { DEFAULT_INSTITUTION_NAME, getInstitutionName } from './institutionName';
 import { paginateDocumentForTurnitin } from './dynamicManuscriptEngine';
@@ -12,7 +13,7 @@ import {
   RawTextItem,
 } from './authenticDocHighlighter';
 
-// Badge color palette matching Turnitin official standards with light pastel backgrounds
+// Badge colour + pastel type-chip palette sampled from the official Turnitin report
 const SOURCE_COLORS: {
   [key: number]: {
     bg: [number, number, number];
@@ -22,21 +23,10 @@ const SOURCE_COLORS: {
     hex: string;
   };
 } = {
-  1: { bg: [233, 30, 99], text: [255, 255, 255], light: [252, 231, 243], lightText: [157, 23, 77], hex: '#e91e63' },   // 1 Pink/Magenta
-  2: { bg: [37, 99, 235], text: [255, 255, 255], light: [219, 234, 254], lightText: [29, 78, 216], hex: '#2563eb' },   // 2 Blue
-  3: { bg: [5, 150, 105], text: [255, 255, 255], light: [209, 250, 229], lightText: [4, 120, 87], hex: '#059669' },   // 3 Emerald/Green
-  4: { bg: [124, 58, 237], text: [255, 255, 255], light: [237, 233, 254], lightText: [109, 40, 217], hex: '#7c3aed' }, // 4 Purple/Violet
-  5: { bg: [219, 39, 119], text: [255, 255, 255], light: [252, 231, 243], lightText: [190, 24, 93], hex: '#db2777' },  // 5 Rose/Pink
-  6: { bg: [37, 99, 235], text: [255, 255, 255], light: [219, 234, 254], lightText: [29, 78, 216], hex: '#2563eb' },   // 6 Blue
-  7: { bg: [22, 163, 74], text: [255, 255, 255], light: [220, 252, 231], lightText: [21, 128, 61], hex: '#16a34a' },  // 7 Green
-  8: { bg: [124, 58, 237], text: [255, 255, 255], light: [237, 233, 254], lightText: [109, 40, 217], hex: '#7c3aed' }, // 8 Deep Purple
-  9: { bg: [225, 29, 72], text: [255, 255, 255], light: [255, 228, 230], lightText: [190, 18, 60], hex: '#e11d48' },  // 9 Crimson/Rose
-  10: { bg: [2, 132, 199], text: [255, 255, 255], light: [224, 242, 254], lightText: [3, 105, 161], hex: '#0284c7' }, // 10 Sky/Cyan
-  11: { bg: [192, 38, 211], text: [255, 255, 255], light: [250, 232, 255], lightText: [162, 28, 175], hex: '#c026d3' }, // 11 Fuchsia
-  12: { bg: [8, 145, 178], text: [255, 255, 255], light: [207, 250, 254], lightText: [14, 116, 144], hex: '#0891b2' },  // 12 Cyan
-  13: { bg: [101, 163, 13], text: [255, 255, 255], light: [236, 252, 203], lightText: [77, 124, 15], hex: '#65a30d' },  // 13 Lime
-  14: { bg: [217, 119, 6], text: [255, 255, 255], light: [254, 243, 199], lightText: [180, 83, 9], hex: '#d97706' },   // 14 Amber
-  15: { bg: [220, 38, 38], text: [255, 255, 255], light: [254, 226, 226], lightText: [185, 28, 28], hex: '#dc2626' },  // 15 Red
+  1: { bg: [203, 19, 117], text: [255, 255, 255], light: [254, 220, 231], lightText: [24, 24, 24], hex: '#CB1375' }, // 1 Magenta
+  2: { bg: [33, 93, 198], text: [255, 255, 255], light: [214, 229, 251], lightText: [24, 24, 24], hex: '#215DC6' },  // 2 Blue
+  3: { bg: [0, 116, 69], text: [255, 255, 255], light: [193, 236, 223], lightText: [24, 24, 24], hex: '#007445' },   // 3 Green
+  4: { bg: [116, 50, 231], text: [255, 255, 255], light: [236, 223, 254], lightText: [24, 24, 24], hex: '#7432E7' }, // 4 Purple
 };
 
 // Exact official Turnitin Full Brand SVG (Emblem + Wordmark + TM)
@@ -170,7 +160,7 @@ async function getAiReportLogoPng(): Promise<string> {
 }
 
 function getSourceColor(idx: number) {
-  const colorIndex = ((idx - 1) % 15) + 1;
+  const colorIndex = ((idx - 1) % 4) + 1;
   return SOURCE_COLORS[colorIndex] || SOURCE_COLORS[1];
 }
 
@@ -2854,12 +2844,10 @@ export async function downloadReportPdf(
     // Left: Headline (with 2 vertical gaps below top header divider line at y=42)
     y = 94;
     const rawAiScoreForHeading = typeof report.aiScore === 'number' ? report.aiScore : 0;
-    let headingAiScore = rawAiScoreForHeading;
-    if (headingAiScore >= 70) {
-      headingAiScore = Math.max(0, headingAiScore - 17);
-    }
-    const isBelowThreshold = headingAiScore >= 1 && headingAiScore <= 20;
-    const isZeroScore = headingAiScore === 0;
+    const headingAiScore = rawAiScoreForHeading;
+    const aiMaskedZero = headingAiScore === 0 && Boolean(report.aiScoreMasked);
+    const isBelowThreshold = (headingAiScore >= 1 && headingAiScore <= 20) || aiMaskedZero;
+    const isZeroScore = headingAiScore === 0 && !aiMaskedZero;
     let aiLabel: string | undefined;
     if (isZeroScore) {
       aiLabel = '0% detected as AI';
@@ -2948,12 +2936,10 @@ export async function downloadReportPdf(
       doc.setFontSize(8.2);
       doc.setTextColor(0, 0, 0);
       const annotationCount = aiAnnotations.length;
-      let labelScoreNum = typeof report.aiScore === 'number' ? report.aiScore : 0;
-      if (labelScoreNum >= 70) labelScoreNum = Math.max(0, labelScoreNum - 17);
-      let labelScoreStr = labelScoreNum + '%';
-      if (labelScoreNum === 0) labelScoreStr = '0%';
-      else if (labelScoreNum >= 1 && labelScoreNum <= 20) labelScoreStr = '*%';
-      else labelScoreStr = labelScoreNum + '%';
+      const labelScoreStr = formatAiScoreDisplay(
+        typeof report.aiScore === 'number' ? report.aiScore : 0,
+        Boolean(report.aiScoreMasked)
+      );
       const aiGeneratedLabel = annotationCount > 0
         ? `${annotationCount} AI-generated ${labelScoreStr}`
         : `AI-generated ${labelScoreStr}`;
@@ -3290,39 +3276,34 @@ export async function downloadReportPdf(
 
         // 1. Source number pill badge on the LEFT
         const numText = `${num}`;
-        const numWidth = Math.max(20, doc.getTextWidth(numText) + 10);
+        const numWidth = 26;
         doc.setFillColor(color.bg[0], color.bg[1], color.bg[2]);
-        doc.roundedRect(margin, y - 8, numWidth, 12, 6, 6, 'F');
+        doc.roundedRect(margin, y - 9, numWidth, 13, 6.5, 6.5, 'F');
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(9.5);
         doc.setTextColor(255, 255, 255);
-        doc.text(numText, margin + numWidth / 2, y + 1.3, { align: 'center' });
+        doc.text(numText, margin + numWidth / 2, y + 0.5, { align: 'center' });
 
-        // 2. Source Type Badge Tag - pastel color matched to source hue
+        // 2. Source Type chip - fixed width pastel pill matched to the source hue
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(9);
-        const tagTextWidth = doc.getTextWidth(typeLabel);
-        const tagPillWidth = tagTextWidth + 24;
-        const tagX = margin + numWidth + 5;
+        const tagPillWidth = 78;
+        const tagX = margin + numWidth + 6;
 
         doc.setFillColor(color.light[0], color.light[1], color.light[2]);
-        doc.roundedRect(tagX, y - 8, tagPillWidth, 12, 6, 6, 'F');
-        doc.setTextColor(0, 0, 0);
-        doc.text(typeLabel, tagX + tagPillWidth / 2, y + 1.3, { align: 'center' });
+        doc.roundedRect(tagX, y - 9, tagPillWidth, 13, 6.5, 6.5, 'F');
+        doc.setTextColor(24, 24, 24);
+        doc.text(typeLabel, tagX + tagPillWidth / 2, y + 0.5, { align: 'center' });
 
-        // 3. Similarity percentage displayed on a separate line below the source title
+        // 3. Source title and similarity percentage share the second line
         const simText = s.similarity <= 1 ? '<1%' : `${clampSimilarityScore(s.similarity)}%`;
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9.5);
-        doc.setTextColor(15, 23, 42);
 
-        // Line 2: Source title
-        y += 18;
-        doc.setFont('helvetica', 'bold');
+        y += 24;
+        doc.setFont('helvetica', 'normal');
         doc.setFontSize(9.5);
-        doc.setTextColor(15, 23, 42);
+        doc.setTextColor(24, 24, 24);
 
-        const maxTitleWidth = contentWidth;
+        const maxTitleWidth = contentWidth - 60;
         let displayTitle = s.name;
         if (doc.getTextWidth(displayTitle) > maxTitleWidth) {
           while (displayTitle.length > 5 && doc.getTextWidth(displayTitle + '...') > maxTitleWidth) {
@@ -3332,17 +3313,14 @@ export async function downloadReportPdf(
         }
 
         doc.text(displayTitle, margin, y);
+        doc.text(simText, pageWidth - margin, y, { align: 'right' });
 
-        // Line 3: Similarity percentage below the title, aligned to the right
-        y += 11;
-        doc.text(simText, pageWidth - margin - 155, y, { align: 'right' });
-
-        // Thin separator line after the percentage
-        y += 5;
-        doc.setDrawColor(203, 213, 225);
-        doc.setLineWidth(0.5);
-        doc.line(margin, y, pageWidth - margin - 150, y);
-        y += 17;
+        // Hairline separator underneath, spanning the full content width
+        y += 8;
+        doc.setDrawColor(217, 217, 217);
+        doc.setLineWidth(0.6);
+        doc.line(margin, y, pageWidth - margin, y);
+        y += 18;
       }
     } else if (pageObj.type === 'manuscript') {
       const mIdx = pageObj.manuscriptIndex || 0;

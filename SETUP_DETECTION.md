@@ -1,28 +1,24 @@
 # Detection Setup Guide
 
-Complete setup for **AI Detection** (TruthScan) + **Plagiarism Detection** (Noplag Engine)
+Complete setup for **AI Detection** (AI or Not) + **Plagiarism Detection** (Noplag Engine)
 
 ---
 
-## 🤖 AI Detection: TruthScan
+## 🤖 AI Detection: AI or Not
 
 ### Setup Steps:
 
-1. **Sign up at TruthScan**
-   - Visit: https://truthscan.com/
-   - Create free account
-   - Get API key from dashboard
+1. **Create an AI or Not account**
+   - Visit: https://www.aiornot.com/
+   - Open the [API dashboard](https://www.aiornot.com/dashboard/api) and create/copy an API key
 
-2. **Add API Key to .env**
+2. **Add the API key to `.env`**
    ```bash
-   TRUTHSCAN_API_KEY=your_actual_key_here
+   AIORNOT_API_KEY=your_actual_key_here
    ```
 
-3. **Free Tier**
-   - 25 scans/month (no credit card)
-   - 1 credit per word
-   - 99%+ accuracy
-   - Multi-detector (GPTZero, OpenAI, Writer, etc.)
+   Keep this key server-side; do not use a `VITE_` variable. The text endpoint accepts 250–500,000 characters.
+   See the [AI or Not text API docs](https://docs.aiornot.com/api-reference/reports-by-modality/text).
 
 ---
 
@@ -87,7 +83,7 @@ Complete setup for **AI Detection** (TruthScan) + **Plagiarism Detection** (Nopl
 3. **Test Both APIs**
    - Upload a document
    - Check console for logs:
-     - `🔍 Using TRUTHSCAN.COM provider for AI detection`
+     - AI or Not detection errors (if any)
      - `📚 Using NOPLAG ENGINE for plagiarism detection`
 
 ---
@@ -117,10 +113,8 @@ docker compose -f docker-compose.noplag.yml down -v
 
 ## 💰 Cost Comparison
 
-### AI Detection (TruthScan):
-- **Free:** 25 scans/month
-- **Starter:** $24/mo = 1,000 scans
-- **Professional:** $83/mo = 5,000 scans
+### AI Detection (AI or Not):
+- Check current plans and usage on the [AI or Not website](https://www.aiornot.com/).
 
 ### Plagiarism Detection (Noplag):
 - **FREE:** Unlimited scans ✅
@@ -150,18 +144,14 @@ docker compose -f docker-compose.noplag.yml down -v
    docker compose -f docker-compose.noplag.yml logs
    ```
 
-### TruthScan Errors:
+### AI or Not Errors:
 
 1. **Invalid API key**
    - Verify key in .env is correct
-   - Check at: https://truthscan.com/
+   - Check at: https://www.aiornot.com/dashboard/api
 
 2. **Rate limit**
-   - Free tier: 25 scans/month exceeded
-   - Upgrade plan or wait for next month
-
-3. **Credits exhausted**
-   - Check remaining at: https://truthscan.com/dashboard
+   - Check your plan and API usage in the AI or Not dashboard, then retry later or upgrade.
 
 ---
 
@@ -169,12 +159,9 @@ docker compose -f docker-compose.noplag.yml down -v
 
 ### Successful AI Detection:
 ```
-🔍 Using TRUTHSCAN.COM provider for AI detection
-   Text length: 2450 characters, ~450 words
-   Cost: 450 credits (1 credit/word)
-📤 DETECTION SUBMITTED: { "id": "...", "status": "pending" }
-📊 TRUTHSCAN RESPONSE: { "result": 73.2, "label": "AI" }
-✅ TRUTHSCAN AI SCORE: 73%
+AI or Not detection completed
+   Text length: 2450 characters
+   AI score: 73%
 ```
 
 ### Successful Plagiarism Detection:
@@ -211,6 +198,6 @@ docker compose -f docker-compose.noplag.yml down -v
 
 ## 📞 Support
 
-- **TruthScan:** https://truthscan.com/support
+- **AI or Not:** https://docs.aiornot.com/
 - **Noplag:** https://github.com/NoplagLabs/noplag-engine/issues
 - **Your App:** Check logs with `npm run dev`

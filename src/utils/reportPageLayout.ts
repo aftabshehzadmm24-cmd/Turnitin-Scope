@@ -41,30 +41,30 @@ export function getReportPageLayout(
   } else {
     // Similarity report: exactly 3 pages before manuscript rendering (cover + integrity + source overview)
     const sourcesPages: PageLayoutItem[] = [];
-    if (sources.length <= 10) {
+    if (sources.length <= 7) {
       sourcesPages.push({
         pageNumber: 3,
         type: 'top_sources',
         sectionTitle: 'Top Sources',
-        sourcesSlice: sources.slice(0, 10),
+        sourcesSlice: sources.slice(0, 7),
         startIndex: 0,
         isFirstSourcePage: true,
       });
     } else {
-      // First page: 10 sources
+      // First page: 7 sources (leaves room for the Match Groups / Top Sources summary)
       sourcesPages.push({
         pageNumber: 3,
         type: 'top_sources',
         sectionTitle: 'Top Sources',
-        sourcesSlice: sources.slice(0, 10),
+        sourcesSlice: sources.slice(0, 7),
         startIndex: 0,
         isFirstSourcePage: true,
       });
-      // Continuation pages: 11 sources per page
-      let sIdx = 10;
+      // Continuation pages: 10 sources per page
+      let sIdx = 7;
       let pNum = 4;
       while (sIdx < sources.length) {
-        const slice = sources.slice(sIdx, sIdx + 11);
+        const slice = sources.slice(sIdx, sIdx + 10);
         sourcesPages.push({
           pageNumber: pNum,
           type: 'top_sources',
@@ -73,7 +73,7 @@ export function getReportPageLayout(
           startIndex: sIdx,
           isFirstSourcePage: false,
         });
-        sIdx += 11;
+        sIdx += 10;
         pNum++;
       }
     }

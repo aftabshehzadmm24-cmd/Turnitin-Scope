@@ -10,116 +10,129 @@ interface AiDetectionResult {
     | { aiScore: number; isDetected: boolean; annotations: AiAnnotation[] };
 }
 
+interface AiorNotTextResponse {
+  report: {
+    ai_text: {
+      confidence: number;
+      is_detected: boolean;
+      annotations?: unknown;
+    };
+  };
+}
+
 export function getAiProviderFailure(error: unknown): { status: number; message: string } {
   if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
-    return { status: 504, message: 'TruthScan AI detection timed out. Please try again.' };
+    return { status: 504, message: 'AI or Not detection timed out. Please try again.' };
   }
   if (error instanceof SyntaxError) {
-    return { status: 502, message: 'TruthScan returned an unreadable response.' };
+    return { status: 502, message: 'AI or Not returned an unreadable response.' };
   }
   if (error instanceof TypeError && /fetch|network|socket|connect|dns/i.test(error.message)) {
-    return { status: 502, message: 'Could not reach TruthScan. Check server network and try again.' };
+    return { status: 502, message: 'Could not reach AI or Not. Check server network and try again.' };
   }
   return { status: 502, message: String(error instanceof Error ? error.message : error) };
 }
 
-export async function analyzeTextWithTruthScan(
+function isAiorNotTextResponse(value: unknown): value is AiorNotTextResponse {
+  if (!value || typeof value !== 'object' || !('report' in value)) return false;
+  const report = value.report;
+  if (!report || typeof report !== 'object' || !('ai_text' in report)) return false;
+  const aiText = report.ai_text;
+  return Boolean(
+    aiText
+    && typeof aiText === 'object'
+    && 'confidence' in aiText
+    && typeof aiText.confidence === 'number'
+    && Number.isFinite(aiText.confidence)
+    && aiText.confidence >= 0
+    && aiText.confidence <= 1
+    && 'is_detected' in aiText
+    && typeof aiText.is_detected === 'boolean'
+  );
+}
+
+function parseAnnotations(value: unknown): AiAnnotation[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error('AI or Not returned invalid text annotations.');
+  }
+
+  return value.map(annotation => {
+    if (
+      !Array.isArray(annotation)
+      || annotation.length !== 2
+      || typeof annotation[0] !== 'string'
+      || typeof annotation[1] !== 'number'
+      || !Number.isFinite(annotation[1])
+      || annotation[1] < 0
+      || annotation[1] > 1
+    ) {
+      throw new Error('AI or Not returned invalid text annotations.');
+    }
+    return { text: annotation[0], confidence: annotation[1] };
+  });
+}
+
+export async function analyzeTextWithAiorNot(
   _authorization: string | undefined,
   text: unknown,
 ): Promise<AiDetectionResult> {
-  const apiKey = process.env.TRUTHSCAN_API_KEY;
+  const apiKey = process.env.AIORNOT_API_KEY;
   if (!apiKey) {
-    return { status: 503, body: { error: 'TruthScan AI detection is not configured on the server.' } };
+    return { status: 503, body: { error: 'AI or Not detection is not configured on the server.' } };
   }
   if (typeof text !== 'string') {
     return { status: 400, body: { error: 'Missing text to analyze.' } };
   }
-
-  const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
-  if (wordCount < 30) {
-    return { status: 422, body: { error: 'Need at least 30 words for AI detection.' } };
+  if (text.trim().length < 250) {
+    return { status: 422, body: { error: 'Need at least 250 characters for AI detection.' } };
   }
-  if (wordCount > 30_000) {
-    return { status: 413, body: { error: "Text exceeds TruthScan's 30,000-word limit." } };
+  if (text.length > 500_000) {
+    return { status: 413, body: { error: "Text exceeds AI or Not's 500,000-character limit." } };
   }
 
   try {
-    const detectResponse = await fetch('https://detect-text.truthscan.com/detect', {
+    const formData = new FormData();
+    formData.set('text', text);
+    const response = await fetch('https://api.aiornot.com/v2/text/sync?include_annotations=true', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
         accept: 'application/json',
       },
-      body: JSON.stringify({
-        text,
-        key: apiKey,
-        model: 'xlm_ud_detector',
-        retry_count: 0,
-        generate_analysis_details: false,
-      }),
+      body: formData,
       signal: AbortSignal.timeout(30_000),
     });
 
-    if (!detectResponse.ok) {
-      const body = await detectResponse.text();
-      if (detectResponse.status === 403) {
-        throw new Error('Invalid TruthScan API key or insufficient credits. Check TRUTHSCAN_API_KEY.');
+    if (!response.ok) {
+      const body = await response.text();
+      if (response.status === 401 || response.status === 403) {
+        throw new Error('Invalid AI or Not API key or insufficient API access. Check AIORNOT_API_KEY.');
       }
-      if (detectResponse.status === 429) {
-        throw new Error('TruthScan rate limit reached. Upgrade plan or wait.');
+      if (response.status === 429) {
+        throw new Error('AI or Not rate limit reached. Please try again later.');
       }
-      throw new Error(`TruthScan returned HTTP ${detectResponse.status}: ${body.slice(0, 150)}`);
+      throw new Error(`AI or Not returned HTTP ${response.status}: ${body.slice(0, 150)}`);
     }
 
-    const detectResult: unknown = await detectResponse.json();
-    if (!detectResult || typeof detectResult !== 'object' || !('id' in detectResult)
-      || typeof detectResult.id !== 'string' || !detectResult.id) {
-      throw new Error('TruthScan returned an invalid detection response.');
+    const result: unknown = await response.json();
+    if (!isAiorNotTextResponse(result)) {
+      throw new Error('AI or Not returned an invalid detection response.');
     }
 
-    let queryResult: unknown;
-    for (let attempt = 0; attempt < 15; attempt++) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      const queryResponse = await fetch('https://detect-text.truthscan.com/query', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          accept: 'application/json',
-        },
-        body: JSON.stringify({ id: detectResult.id }),
-        signal: AbortSignal.timeout(10_000),
-      });
-
-      if (!queryResponse.ok) {
-        throw new Error(`TruthScan query failed: HTTP ${queryResponse.status}`);
-      }
-
-      queryResult = await queryResponse.json();
-      if (queryResult && typeof queryResult === 'object' && 'status' in queryResult
-        && queryResult.status === 'done') {
-        break;
-      }
-    }
-
-    if (!queryResult || typeof queryResult !== 'object' || !('status' in queryResult)
-      || queryResult.status !== 'done' || !('result' in queryResult)
-      || typeof queryResult.result !== 'number' || !Number.isFinite(queryResult.result)) {
-      throw new Error('TruthScan processing timed out or returned an invalid result.');
-    }
-
-    const rawScore = Math.round(queryResult.result);
-    const aiScore = rawScore > 70 ? rawScore - 12 : rawScore;
-    const annotations: AiAnnotation[] = [{
-      text: text.slice(0, 300) + (text.length > 300 ? '...' : ''),
-      confidence: queryResult.result / 100,
-    }];
+    const aiText = result.report.ai_text;
+    const annotations = parseAnnotations(aiText.annotations);
 
     return {
       status: 200,
-      body: { aiScore, isDetected: aiScore >= 50, annotations },
+      body: {
+        aiScore: Math.round(aiText.confidence * 100),
+        isDetected: aiText.is_detected,
+        annotations,
+      },
     };
   } catch (error) {
-    console.error('TruthScan AI detection error:', error);
+    console.error('AI or Not detection error:', error);
     const failure = getAiProviderFailure(error);
     return { status: failure.status, body: { error: failure.message } };
   }

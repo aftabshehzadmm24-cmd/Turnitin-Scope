@@ -67,10 +67,10 @@ if ($ready) {
 Write-Host ""
 Write-Host "🎉 Detection Services Status:" -ForegroundColor Cyan
 Write-Host "   ✅ Noplag Engine: RUNNING (Plagiarism)" -ForegroundColor Green
-Write-Host "   ✅ TruthScan: CONFIGURED (AI Detection)" -ForegroundColor Green
+Write-Host "   ✅ AI or Not: CONFIGURED (AI Detection)" -ForegroundColor Green
 Write-Host ""
 Write-Host "📝 Next Steps:" -ForegroundColor Yellow
-Write-Host "   1. Make sure TRUTHSCAN_API_KEY is set in .env" -ForegroundColor White
+Write-Host "   1. Make sure AIORNOT_API_KEY is set in .env" -ForegroundColor White
 Write-Host "   2. Run: npm run dev" -ForegroundColor White
 Write-Host "   3. Upload a document to test" -ForegroundColor White
 Write-Host ""

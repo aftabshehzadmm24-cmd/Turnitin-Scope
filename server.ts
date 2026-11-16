@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { analyzeTextWithTruthScan } from "./server/aiDetection.ts";
+import { analyzeTextWithAiorNot } from "./server/aiDetection.ts";
 import { analyzeTextForPlagiarism } from "./server/plagiarismDetection.ts";
 import { convertDocxToPdf } from "./server/docxConverter.ts";
 import { getAvailablePort } from "./server/port.ts";
@@ -74,7 +74,7 @@ async function startServer() {
 
   app.post("/api/ai-detect", async (req, res) => {
     try {
-      const result = await analyzeTextWithTruthScan(req.get("Authorization"), req.body?.text);
+      const result = await analyzeTextWithAiorNot(req.get("Authorization"), req.body?.text);
       return res.status(result.status).json(result.body);
     } catch (err: any) {
       console.error("Unhandled error in /api/ai-detect:", err);

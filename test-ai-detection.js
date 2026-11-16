@@ -9,7 +9,7 @@ What is Artificial Intelligence?
 
 Artificial Intelligence refers to the simulation of human intelligence in machines programmed to think and learn like humans. AI systems can perform tasks that typically require human intelligence, such as visual perception, speech recognition, decision-making, and language translation.`;
 
-fetch('http://localhost:3000/ai-detect', {
+fetch('http://localhost:3000/api/ai-detect', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ text: testText })

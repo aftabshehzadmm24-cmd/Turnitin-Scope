@@ -34,7 +34,7 @@ steps:
       - --max-instances=10
       - --port=3000
       - --set-env-vars=NODE_ENV=production
-      - --set-secrets=TRUTHSCAN_API_KEY=TRUTHSCAN_API_KEY:latest
+      - --set-secrets=AIORNOT_API_KEY=AIORNOT_API_KEY:latest
 
 images:
   - "gcr.io/$PROJECT_ID/originality-check-api"

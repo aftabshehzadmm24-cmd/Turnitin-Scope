@@ -2499,6 +2499,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       let aiScore = 0;
+      let aiScoreMasked = false;
       let aiAnnotations: Array<{ text: string; confidence: number }> = [];
       let aiDetectionError: string | undefined;
       let reportMode = options.mode;
@@ -2509,8 +2510,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           // sending to the AI API — these sections should never count toward the AI score.
           let aiScanText = filterTextForAiScan(sampleText);
 
-          // AI provider is limited to 30,000 words; in 'both' mode the similarity
-          // portion still scans the full document, but AI only sees the first 30k words.
+          // Keep the app's 30,000-word AI scan limit; in 'both' mode, similarity still
+          // scans the full document while AI only sees the first 30k words.
           const aiWords = aiScanText.trim().split(/\s+/).filter(Boolean);
           if (aiWords.length > aiWordLimit) {
             aiScanText = aiWords.slice(0, aiWordLimit).join(' ');
@@ -2519,9 +2520,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (aiScanText.length < 250) {
             throw new Error('Not enough body text (after excluding TOC, tables, figures, references, and headings) for AI detection. Please upload a document with more readable body content.');
           }
-          setScanProgress({ step: 'Checking text with TruthScan...', percent: 60 });
+          setScanProgress({ step: 'Checking text with AI or Not...', percent: 60 });
 
-          // Route through the app server to TruthScan; keep the API key server-side.
+          // Route through the app server to AI or Not; keep the API key server-side.
           const apiBase = (
             import.meta.env.VITE_API_URL
             ?? import.meta.env.VITE_DOCX_CONVERTER_URL
@@ -2539,7 +2540,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (typeof result.aiScore !== 'number' || !Array.isArray(result.annotations)) {
             throw new Error('AI detection returned an invalid response.');
           }
-          aiScore = result.aiScore;
+          const detectedAiScore = Math.round(result.aiScore);
+          // Scores around 70% and above are reported 19 points lower, so the
+          // stored number (used for highlighting, screens and PDFs) is adjusted.
+          aiScore = detectedAiScore >= 70
+            ? Math.max(0, detectedAiScore - 19)
+            : detectedAiScore;
+          // A true 0% result is shown as '*%' in half of reports and '0%' in the rest.
+          // Strict alternation (not random) so 10 zero-AI reports give exactly 5 '*%'
+          // and 5 '0%' per user.
+          if (aiScore === 0) {
+            const zeroAiReports = (reportsRef.current || []).filter(
+              report =>
+                report.type !== 'Plagiarism Check' &&
+                typeof report.aiScore === 'number' &&
+                report.aiScore === 0
+            );
+            const maskedCount = zeroAiReports.filter(report => report.aiScoreMasked).length;
+            const unmaskedCount = zeroAiReports.length - maskedCount;
+            aiScoreMasked = maskedCount <= unmaskedCount;
+          }
           aiAnnotations = result.annotations;
         } catch (err) {
           console.error('AI detection request failed:', err);
@@ -2623,6 +2643,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         status: 'Completed',
         plagiarismScore: plagScore,
         aiScore: aiScore,
+        aiScoreMasked,
         wordCount: calculatedWordCount,
         characterCount: calculatedCharCount,
         date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZoneName: 'short' }),

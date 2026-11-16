@@ -1,6 +1,7 @@
 import React from 'react';
 import { ScanReport, MatchedSource } from '../types';
 import { clampSimilarityScore } from '../utils/documentParser';
+import { formatAiScoreDisplay } from '../utils/aiScore';
 import { getInstitutionName } from '../utils/institutionName';
 import {
   Building2,
@@ -335,16 +336,17 @@ export const TurnitinAIOverviewPage: React.FC<{
 }> = ({ report, totalPages, mode = 'ai' }) => {
   const submissionId = report.submissionId || 'trn:oid:::1:9948210344';
   const rawAiScore = typeof report.aiScore === 'number' ? report.aiScore : 0;
+  const aiMaskedZero = rawAiScore === 0 && Boolean(report.aiScoreMasked);
   let displayAiScore = rawAiScore;
   
-  const isBelowThreshold = displayAiScore <= 20 && displayAiScore >= 1;
-  const isZero = displayAiScore === 0;
+  const isBelowThreshold = (displayAiScore <= 20 && displayAiScore >= 1) || aiMaskedZero;
+  const isZero = displayAiScore === 0 && !aiMaskedZero;
   const aiAnnotations = report.snippets
     .filter(snippet => snippet.type === 'ai_generated')
     .map(snippet => snippet.text);
   const showAiGeneratedSummary = rawAiScore > 0 || aiAnnotations.length > 0;
   // Use original score for display to match official Turnitin format
-  const scoreDisplay = formatTurnitinAiScore(rawAiScore);
+  const scoreDisplay = formatAiScoreDisplay(rawAiScore, aiMaskedZero);
 
   return (
     <div
@@ -433,7 +435,7 @@ export const TurnitinAIOverviewPage: React.FC<{
             <div className="min-w-0">
               <p className="text-[9px] font-normal leading-tight text-black">
                 {aiAnnotations.length > 0 ? `${aiAnnotations.length} ` : ''}
-                AI-generated {rawAiScore >= 1 && rawAiScore <= 20 ? '*%' : (rawAiScore > 20 ? `${rawAiScore}%` : scoreDisplay)}
+                AI-generated {scoreDisplay}
               </p>
               <p className="mt-0.5 text-[7px] leading-tight text-slate-600">
                 Likely generated or likely generated and revised by AI.
@@ -698,11 +700,8 @@ export const TurnitinIntegrityOverviewPage: React.FC<{
  * Official Turnitin AI score display rule:
  * Scores between 1% and 20% must display as '*%' with no highlighted text.
  */
-export function formatTurnitinAiScore(score: number): string {
-  if (score >= 1 && score <= 20) {
-    return '*%';
-  }
-  return `${score}%`;
+export function formatTurnitinAiScore(score: number, maskedZero = false): string {
+  return formatAiScoreDisplay(score, maskedZero);
 }
 
 /**
@@ -730,28 +729,71 @@ export function toBoldUnicode(str: string): string {
 }
 
 /**
- * Top Sources Color Palette matching Turnitin numbered badges and text highlighting.
- * In official samples: mostly red with light red highlight under text, with some lines appearing blue/underlined.
+ * Top Sources Color Palette — exact 4-colour cycle sampled from the official
+ * Turnitin report (badge colour + matching pastel type-chip colour).
  */
+export const TOP_SOURCE_PALETTE = [
+  { badgeHex: '#CB1375', chipHex: '#FEDCE7', bg: 'bg-[#CB1375]' }, // 1 Magenta
+  { badgeHex: '#215DC6', chipHex: '#D6E5FB', bg: 'bg-[#215DC6]' }, // 2 Blue
+  { badgeHex: '#007445', chipHex: '#C1ECDF', bg: 'bg-[#007445]' }, // 3 Green
+  { badgeHex: '#7432E7', chipHex: '#ECDFFE', bg: 'bg-[#7432E7]' }, // 4 Purple
+] as const;
+
 export const getBadgeColor = (index: number) => {
-  const colors = [
-    { bg: 'bg-[#e91e63]', text: 'text-white', light: '#fce7f3', textColor: '#9d174d', tagBg: 'bg-[#fce7f3] text-[#9d174d]', isUnderlined: false }, // 1 Pink/Magenta
-    { bg: 'bg-[#2563eb]', text: 'text-white', light: '#dbeafe', textColor: '#1d4ed8', tagBg: 'bg-[#dbeafe] text-[#1d4ed8]', isUnderlined: false }, // 2 Blue
-    { bg: 'bg-[#059669]', text: 'text-white', light: '#d1fae5', textColor: '#047857', tagBg: 'bg-[#d1fae5] text-[#047857]', isUnderlined: false }, // 3 Emerald/Green
-    { bg: 'bg-[#7c3aed]', text: 'text-white', light: '#ede9fe', textColor: '#6d28d9', tagBg: 'bg-[#ede9fe] text-[#6d28d9]', isUnderlined: false }, // 4 Purple/Violet
-    { bg: 'bg-[#db2777]', text: 'text-white', light: '#fce7f3', textColor: '#be185d', tagBg: 'bg-[#fce7f3] text-[#be185d]', isUnderlined: false }, // 5 Rose/Pink
-    { bg: 'bg-[#2563eb]', text: 'text-white', light: '#dbeafe', textColor: '#1d4ed8', tagBg: 'bg-[#dbeafe] text-[#1d4ed8]', isUnderlined: false }, // 6 Blue
-    { bg: 'bg-[#16a34a]', text: 'text-white', light: '#dcfce7', textColor: '#15803d', tagBg: 'bg-[#dcfce7] text-[#15803d]', isUnderlined: false }, // 7 Green
-    { bg: 'bg-[#7c3aed]', text: 'text-white', light: '#ede9fe', textColor: '#6d28d9', tagBg: 'bg-[#ede9fe] text-[#6d28d9]', isUnderlined: false }, // 8 Deep Purple
-    { bg: 'bg-[#e11d48]', text: 'text-white', light: '#ffe4e6', textColor: '#be123c', tagBg: 'bg-[#ffe4e6] text-[#be123c]', isUnderlined: false }, // 9 Crimson/Rose
-    { bg: 'bg-[#0284c7]', text: 'text-white', light: '#e0f2fe', textColor: '#0369a1', tagBg: 'bg-[#e0f2fe] text-[#0369a1]', isUnderlined: false }, // 10 Sky/Cyan
-    { bg: 'bg-[#c026d3]', text: 'text-white', light: '#fae8ff', textColor: '#a21caf', tagBg: 'bg-[#fae8ff] text-[#a21caf]', isUnderlined: false }, // 11 Fuchsia
-    { bg: 'bg-[#0891b2]', text: 'text-white', light: '#cffafe', textColor: '#0e7490', tagBg: 'bg-[#cffafe] text-[#0e7490]', isUnderlined: false }, // 12 Cyan
-    { bg: 'bg-[#65a30d]', text: 'text-white', light: '#ecfccb', textColor: '#4d7c0f', tagBg: 'bg-[#ecfccb] text-[#4d7c0f]', isUnderlined: false }, // 13 Lime
-    { bg: 'bg-[#d97706]', text: 'text-white', light: '#fef3c7', textColor: '#b45309', tagBg: 'bg-[#fef3c7] text-[#b45309]', isUnderlined: false }, // 14 Amber
-    { bg: 'bg-[#dc2626]', text: 'text-white', light: '#fee2e2', textColor: '#b91c1c', tagBg: 'bg-[#fee2e2] text-[#b91c1c]', isUnderlined: false }, // 15 Red
-  ];
-  return colors[(index - 1) % colors.length];
+  const color = TOP_SOURCE_PALETTE[(index - 1) % TOP_SOURCE_PALETTE.length];
+  return {
+    badgeHex: color.badgeHex,
+    chipHex: color.chipHex,
+    bg: color.bg,
+    text: 'text-white',
+    light: color.chipHex,
+    textColor: '#181818',
+    tagBg: `text-[#181818]`,
+    isUnderlined: false,
+  };
+};
+
+/**
+ * Single Top Sources row, matching the official report:
+ * numbered pill + type chip on the first line, source name and right-aligned
+ * percentage on the second line, hairline separator underneath.
+ */
+const TopSourceRow: React.FC<{ source: MatchedSource; index: number }> = ({ source, index }) => {
+  const badge = getBadgeColor(index);
+  const displaySim = source.similarity <= 1 ? '<1%' : `${clampSimilarityScore(source.similarity)}%`;
+  const typeLabel =
+    source.type === 'internet'
+      ? 'Internet'
+      : source.type === 'student_paper'
+      ? 'Submitted works'
+      : 'Publication';
+
+  return (
+    <div className="pt-4 pb-3" style={{ borderBottom: '1px solid #D9D9D9' }}>
+      <div className="flex items-center gap-[9px]">
+        <span
+          className="inline-flex h-[23px] w-[37px] shrink-0 items-center justify-center rounded-full text-[11.5px] font-bold leading-none tabular-nums text-white"
+          style={{ backgroundColor: badge.badgeHex }}
+        >
+          {index}
+        </span>
+        <span
+          className="inline-flex h-[23px] min-w-[109px] shrink-0 items-center justify-center rounded-full px-3 text-[11px] font-normal leading-none"
+          style={{ backgroundColor: badge.chipHex, color: '#181818' }}
+        >
+          {typeLabel}
+        </span>
+      </div>
+      <div className="mt-2 flex items-baseline justify-between gap-6">
+        <span className="min-w-0 truncate text-[12.5px] leading-none" style={{ color: '#181818' }}>
+          {source.name}
+        </span>
+        <span className="shrink-0 text-[12.5px] leading-none tabular-nums" style={{ color: '#181818' }}>
+          {displaySim}
+        </span>
+      </div>
+    </div>
+  );
 };
 
 /**
@@ -802,7 +844,7 @@ export const TurnitinTopSourcesPage: React.FC<{
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
               {/* Column 1: Match Groups */}
               <div className="space-y-3.5">
-                <h3 className="text-[15.5px] font-bold text-slate-900 tracking-tight">
+                <h3 className="text-[17px] font-bold text-black tracking-tight">
                   Match Groups
                 </h3>
 
@@ -882,7 +924,7 @@ export const TurnitinTopSourcesPage: React.FC<{
 
               {/* Column 2: Top Sources Summary */}
               <div>
-                <h3 className="text-[14px] font-bold text-slate-950 tracking-tight mb-2">
+                <h3 className="text-[17px] font-bold text-black tracking-tight mb-2">
                   Top Sources
                 </h3>
 
@@ -914,92 +956,36 @@ export const TurnitinTopSourcesPage: React.FC<{
             {/* Bottom Half: Top Sources Detailed List (Full Width) */}
             <div className="space-y-2 flex-1">
               <div>
-                <h3 className="text-[14px] font-bold text-slate-950 tracking-tight">
+                <h3 className="text-[17px] font-bold text-black tracking-tight">
                   Top Sources
                 </h3>
-                <p className="text-[10px] text-slate-700 font-normal mt-0.5">
+                <p className="text-[11px] font-normal mt-1" style={{ color: '#626262' }}>
                   The sources with the highest number of matches within the submission. Overlapping sources will not be displayed.
                 </p>
               </div>
 
-              <div className="space-y-0 pt-1">
-                {sourcesSlice.map((s, idx) => {
-                  const currentIdx = startIndex + idx + 1;
-                  const badge = getBadgeColor(currentIdx);
-                  const displaySim = s.similarity <= 1 ? '<1%' : `${clampSimilarityScore(s.similarity)}%`;
-                  const typeLabel =
-                    s.type === 'internet'
-                      ? 'Internet'
-                      : s.type === 'student_paper'
-                      ? 'Submitted works'
-                      : 'Publication';
-
-                  return (
-                    <div
-                      key={`${s.id}-${currentIdx}`}
-                      className="relative flex h-32 flex-col justify-center after:absolute after:bottom-0 after:left-0 after:right-[150px] after:border-b after:border-slate-300 last:after:hidden"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <span
-                          className={`inline-flex h-9 min-w-[2.75rem] shrink-0 items-center justify-center rounded-full px-2 text-center text-[12px] font-bold tabular-nums leading-none text-white ${badge.bg}`}
-                        >
-                          {currentIdx}
-                        </span>
-                        <span className={`inline-flex h-9 shrink-0 items-center justify-center rounded-full px-7 text-center text-[12px] font-semibold leading-none ${badge.tagBg.split(' ')[0]} text-black`}>
-                          {typeLabel}
-                        </span>
-                      </div>
-                      <div className="mt-3 min-w-0">
-                        <span className="block min-w-0 truncate text-[13.5px] font-semibold text-slate-900">
-                          {s.name}
-                        </span>
-                        <span className="mt-0.5 block pr-[155px] text-right text-[13.5px] font-semibold text-slate-900">{displaySim}</span>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="pt-1">
+                {sourcesSlice.map((s, idx) => (
+                  <TopSourceRow
+                    key={`${s.id}-${startIndex + idx + 1}`}
+                    source={s}
+                    index={startIndex + idx + 1}
+                  />
+                ))}
               </div>
             </div>
           </div>
         ) : (
           /* Multi-page continuation of sources (Pages 4, 5, etc.) */
           <div className="flex-1 flex flex-col justify-start">
-            <div className="space-y-0 pt-1">
-              {sourcesSlice.map((s, idx) => {
-                const currentIdx = startIndex + idx + 1;
-                const badge = getBadgeColor(currentIdx);
-                const displaySim = s.similarity <= 1 ? '<1%' : `${clampSimilarityScore(s.similarity)}%`;
-                const typeLabel =
-                  s.type === 'internet'
-                    ? 'Internet'
-                    : s.type === 'student_paper'
-                    ? 'Submitted works'
-                    : 'Publication';
-
-                return (
-                  <div
-                    key={`${s.id}-${currentIdx}`}
-                    className="relative flex h-32 flex-col justify-center after:absolute after:bottom-0 after:left-0 after:right-[150px] after:border-b after:border-slate-300 last:after:hidden"
-                  >
-                  <div className="flex items-center gap-2.5">
-                      <span
-                        className={`inline-flex h-9 min-w-[2.75rem] shrink-0 items-center justify-center rounded-full px-2 text-center text-[12px] font-bold tabular-nums leading-none text-white ${badge.bg}`}
-                      >
-                        {currentIdx}
-                      </span>
-                      <span className={`inline-flex h-9 shrink-0 items-center justify-center rounded-full px-7 text-center text-[12px] font-semibold leading-none ${badge.tagBg.split(' ')[0]} text-black`}>
-                        {typeLabel}
-                      </span>
-                    </div>
-                    <div className="mt-3 min-w-0">
-                      <span className="block min-w-0 truncate text-[13.5px] font-semibold text-slate-900">
-                        {s.name}
-                      </span>
-                      <span className="mt-0.5 block pr-[155px] text-right text-[13.5px] font-semibold text-slate-900">{displaySim}</span>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="pt-1">
+              {sourcesSlice.map((s, idx) => (
+                <TopSourceRow
+                  key={`${s.id}-${startIndex + idx + 1}`}
+                  source={s}
+                  index={startIndex + idx + 1}
+                />
+              ))}
             </div>
           </div>
         )}

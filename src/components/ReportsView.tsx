@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { ScanReport } from '../types';
 import { downloadReportPdf } from '../utils/pdfGenerator';
 import { clampSimilarityScore } from '../utils/documentParser';
+import { formatAiScoreDisplay } from '../utils/aiScore';
 import {
   Search,
   FileText,
@@ -276,7 +277,7 @@ export const ReportsView: React.FC = () => {
                         ? 'text-amber-600'
                         : 'text-emerald-600'
                     }`}>
-                      {rep.type === 'Plagiarism Check' ? '—' : `${rep.aiScore ?? 0}%`}
+                      {rep.type === 'Plagiarism Check' ? '—' : formatAiScoreDisplay(rep.aiScore ?? 0, Boolean(rep.aiScoreMasked))}
                     </p>
                   </div>
                   <p className="col-span-2 px-1 text-xs text-slate-500">
@@ -342,7 +343,7 @@ export const ReportsView: React.FC = () => {
                               : 'text-emerald-600'
                           }`}
                         >
-                          {rep.type === 'Plagiarism Check' ? '—' : `${rep.aiScore ?? 0}%`}
+                          {rep.type === 'Plagiarism Check' ? '—' : formatAiScoreDisplay(rep.aiScore ?? 0, Boolean(rep.aiScoreMasked))}
                         </span>
                       </td>
                       <td className="py-3.5 px-4 text-slate-400 whitespace-nowrap text-[11px]">
